@@ -20,6 +20,13 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Bring the app forward. `-[NSApplication activate]` is macOS 14+, and the
+/// minimum is 13 (Decision 3), so the older call stays.
+#[allow(deprecated, unused_unsafe)]
+fn activate(mtm: MainThreadMarker) {
+    unsafe { NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true) };
+}
+
 fn ns(s: &str) -> Retained<NSString> {
     NSString::from_str(s)
 }
@@ -379,7 +386,7 @@ impl Delegate {
             alert.setAccessoryView(Some(&view));
             alert.addButtonWithTitle(&ns(ok));
             alert.addButtonWithTitle(&ns("Cancel"));
-            NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+            activate(mtm);
             alert.runModal()
         };
         let chosen = self.ivars().options.borrow_mut().take().map(|o| Self::read_options(&o));
@@ -481,7 +488,7 @@ impl Delegate {
             content.addSubview(&detail);
             w.center();
             w.makeKeyAndOrderFront(None);
-            NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+            activate(mtm);
             *self.ivars().rows.borrow_mut() = rows;
             *self.ivars().detail.borrow_mut() = Some(detail);
             *self.ivars().window.borrow_mut() = Some(w);
@@ -525,7 +532,7 @@ impl Delegate {
             match r {
                 Ok(()) => {
                     if let Some(w) = self.ivars().window.borrow_mut().take() {
-                        unsafe { w.close() };
+                        w.close();
                     }
                 }
                 Err(e) => {
@@ -533,7 +540,7 @@ impl Delegate {
                     if self.alert("Setup stopped", &format!("{e}\n\nFix the cause and choose Try again; setup resumes where it stopped."), &["Try again", "Close"]) == 0 {
                         self.ivars().shared.lock().unwrap().finished = None;
                         if let Some(w) = self.ivars().window.borrow_mut().take() {
-                            unsafe { w.close() };
+                            w.close();
                         }
                         self.first_run();
                     }
@@ -554,7 +561,7 @@ impl Delegate {
             for b in buttons {
                 a.addButtonWithTitle(&ns(b));
             }
-            NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+            activate(mtm);
             (a.runModal() - NSAlertFirstButtonReturn).max(0) as usize
         }
     }

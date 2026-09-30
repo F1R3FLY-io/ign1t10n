@@ -75,21 +75,42 @@ fn team_id(app: &str) -> Option<String> {
     String::from_utf8_lossy(&out.stderr).lines().find_map(|l| l.strip_prefix("TeamIdentifier=")).map(str::to_string).filter(|t| t != "not set")
 }
 
-/// S0: F1R3Gaze.app has the right bundle identifier and a valid signature
-/// from the same team as ign1t10n (skipped for unsigned development builds).
+/// The `.app` bundle containing the configured `f1r3gaze` executable
+/// (`.../F1R3Gaze.app/Contents/MacOS/f1r3gaze`), if it is inside one.
+fn gaze_bundle() -> Option<std::path::PathBuf> {
+    let bin = crate::paths::Paths::from_env().gaze_bin;
+    let app = bin.ancestors().nth(3)?.to_path_buf();
+    (app.extension().is_some_and(|e| e == "app") && bin.parent()?.ends_with("Contents/MacOS")).then_some(app)
+}
+
+fn bundle_id(app: &std::path::Path) -> Option<String> {
+    let out = Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleIdentifier", &app.join("Contents/Info.plist").display().to_string()])
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// S0: the F1R3Gaze bundle ign1t10n will drive has F1R3Gaze's identifier and
+/// a valid signature from the same team as ign1t10n. The signature check is
+/// skipped for unsigned development builds of ign1t10n; the whole check is
+/// skipped when `f1r3gaze` is not inside an app bundle (a development or
+/// test stand-in named by IGN1T10N_GAZE_BIN).
 pub fn check_gaze_signature() -> Result<(), String> {
-    let gaze = "/Applications/F1R3Gaze.app";
-    let plist = Command::new("/usr/bin/defaults").args(["read", &format!("{gaze}/Contents/Info"), "CFBundleIdentifier"]).output().map_err(|e| e.to_string())?;
-    if String::from_utf8_lossy(&plist.stdout).trim() != crate::GAZE_BUNDLE_ID {
-        return Err(format!("{gaze} is not F1R3Gaze ({})", crate::GAZE_BUNDLE_ID));
+    let Some(app) = gaze_bundle() else { return Ok(()) };
+    let gaze = app.display().to_string();
+    match bundle_id(&app) {
+        Some(id) if id == crate::GAZE_BUNDLE_ID => {}
+        Some(id) => return Err(format!("{gaze} has bundle identifier {id}, expected {}", crate::GAZE_BUNDLE_ID)),
+        None => return Err(format!("cannot read {gaze}/Contents/Info.plist")),
     }
     let own = std::env::current_exe().ok().and_then(|p| p.ancestors().nth(3).map(|a| a.display().to_string()));
-    let Some(ours) = own.as_deref().and_then(team_id) else { return Ok(()) };
-    let ok = Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict", gaze]).status().map(|s| s.success()).unwrap_or(false);
+    let Some(ours) = own.as_deref().filter(|a| a.ends_with(".app")).and_then(team_id) else { return Ok(()) };
+    let ok = Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict", &gaze]).status().map(|s| s.success()).unwrap_or(false);
     if !ok {
         return Err("F1R3Gaze's signature does not verify".into());
     }
-    if team_id(gaze).as_deref() != Some(ours.as_str()) {
+    if team_id(&gaze).as_deref() != Some(ours.as_str()) {
         return Err("F1R3Gaze is not signed by F1R3FLY.io's team".into());
     }
     Ok(())
