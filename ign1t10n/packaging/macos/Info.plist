@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>io.f1r3fly.ign1t10n</string>
+  <key>CFBundleName</key><string>ign1t10n</string>
+  <key>CFBundleDisplayName</key><string>ign1t10n</string>
+  <key>CFBundleExecutable</key><string>ign1t10n</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@BUILD@</string>
+  <key>CFBundleIconFile</key><string>ign1t10n</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSArchitecturePriority</key><array><string>arm64</string></array>
+  <key>LSRequiresNativeExecution</key><true/>
+  <key>LSUIElement</key><true/>
+  <key>NSHumanReadableCopyright</key><string>© 2026 F1R3FLY.io</string>
+</dict>
+</plist>

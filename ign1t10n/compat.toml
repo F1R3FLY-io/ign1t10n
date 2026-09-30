@@ -1,0 +1,5 @@
+# Storage formats (work package N4) whose data directories this release's
+# f1r3node can open. The supervisor refuses to start a shard recorded with a
+# format not listed here (spec, Upgrade).
+current = 1
+readable = [1]

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Registered by the app with SMAppService.agent(plistName:) (spec §5.2).
+     BundleProgram is relative to the app bundle. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>io.f1r3fly.ign1t10n.supervisor</string>
+  <key>BundleProgram</key><string>Contents/MacOS/ign1t10n</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>Contents/MacOS/ign1t10n</string>
+    <string>supervise</string>
+  </array>
+  <key>AssociatedBundleIdentifiers</key><array><string>io.f1r3fly.ign1t10n</string></array>
+  <key>RunAtLoad</key><true/>
+  <!-- Restart on crash only: a deliberate exit (uninstall, Shutdown) is 0. -->
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
+</dict>
+</plist>

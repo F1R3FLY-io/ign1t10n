@@ -1,0 +1,12 @@
+#!/bin/sh
+# ign1t10n component postinstall (spec §4): runs as root. It does not touch
+# the user's home: provisioning happens at first launch, as the user.
+# It only opens the app in the logged-in user's session.
+set -eu
+APP="/Applications/ign1t10n.app"
+USER_NAME="$(/usr/bin/stat -f %Su /dev/console)"
+if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ] && [ "$USER_NAME" != "loginwindow" ]; then
+  USER_ID="$(/usr/bin/id -u "$USER_NAME")"
+  /bin/launchctl asuser "$USER_ID" /usr/bin/sudo -u "$USER_NAME" /usr/bin/open -a "$APP" --args --first-run || true
+fi
+exit 0

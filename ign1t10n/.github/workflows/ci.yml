@@ -1,0 +1,30 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    # The portable core: unit tests (incl. OpenSSL decrypting our PEMs) and
+    # the end-to-end test against examples/fake_node.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --all-targets
+      - run: cargo test --locked -- --test-threads=1
+
+  macos:
+    # The AppKit menu bar and platform::macos only compile here.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --target aarch64-apple-darwin --all-targets
+      - run: cargo test --locked --target aarch64-apple-darwin -- --test-threads=1
+        env:
+          IGN1T10N_DEV_SECRETS: "1"

@@ -7,6 +7,7 @@
 \usepackage{booktabs,tabularx,array,longtable}
 \usepackage{enumitem}
 \usepackage{listings}
+\usepackage{graphicx}
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,fit,calc,backgrounds}
 \usepackage{xurl}
@@ -53,8 +54,8 @@
 \lstdefinelanguage{Conf}{comment=[l]{\#}}
 
 \title{\textbf{ign1t10n: macOS Installer Specification}\\[4pt]
-\large One install: a single-validator \Nd{} shard, its observer, and the \Gz{} browser\\[6pt]
-\normalsize Version 0.2 (draft for review)}
+\large One install: a multi-validator \Nd{} shard, its observer, and the \Gz{} browser\\[6pt]
+\normalsize Version 0.3 (draft for review)}
 \author{Lucius Gregory Meredith\\
 \small CEO, F1R3FLY.io, and Chief Science Officer, F1R3FLY Industries}
 \date{30 September 2026}
@@ -64,22 +65,27 @@
 
 \begin{abstract}
 \noindent
-This specification defines an installer for macOS that leaves a person, a few
-minutes after double-clicking one file, with three things running on their own
-machine: a single-validator \Nd{} shard, a read-only observer node joined to it,
-and the \Gz{} browser configured to deploy to the one and read from the other,
-paying from a wallet that the shard's genesis has funded. It fixes the artifact
-(a signed, notarised product archive, \Hr{}, carrying \Gz{} and the
-\Hr{} menu-bar application, which owns the shard), the first-run provisioning sequence,
-the supervision of the two nodes by a per-user launch agent, the configuration
-written to each program, the security model, upgrade, reset and uninstall, the
-build and release pipeline, and acceptance tests. It is grounded in a review of
-\Nd{} at \code{fce422a}, \Gz{} at \code{f6ee26a} and \Camp{} at \code{b46e16c}
-(with \Gz{}'s pinned \Camp{} revision \code{ea2d323}), and of the \Gz{}
-architecture proposal and implementation specification in
-\code{publications/f1r3gaze}. The review produced eleven findings; four of them
-require small changes in \Nd{} and three in \Gz{}, specified here as work
-packages.
+This specification defines \Hr{}, an installer for macOS that leaves a person, a
+few minutes after double-clicking one file, with a working \Nd{} shard on their own
+machine: two validators by default, a read-only observer joined to them, and the
+\Gz{} browser configured to deploy to the shard and read from it, paying from a
+wallet that the shard's genesis has funded. A configuration panel lets the user
+change the number of validators, from two up to ten, either by growing or shrinking
+the running shard (new validators join, are funded and bond at the next epoch;
+departing ones withdraw first) or by starting a new shard of the chosen size. The
+specification fixes the artifact (a signed, notarised product archive carrying
+\Gz{} and the \Hr{} menu-bar application, which owns the shard), first-run
+provisioning, the supervision of every node by one per-user launch agent, the
+configuration written to each program, the resizing procedure, the security model,
+upgrade, reset and uninstall, the build and release pipeline, and acceptance tests.
+It is grounded in a review of \Nd{} at \code{fce422a}, \Gz{} at \code{f6ee26a} and
+\Camp{} at \code{b46e16c} (with \Gz{}'s pinned \Camp{} revision \code{ea2d323}),
+and of the \Gz{} architecture proposal and implementation specification in
+\code{publications/f1r3gaze}.
+
+Version 0.3 replaces the single standalone validator of version 0.2 with the
+multi-validator topology the node repository already runs and tests
+(\code{docker/shard.yml}), generalised to $N$ validators on loopback.
 \end{abstract}
 
 \tableofcontents
@@ -96,26 +102,35 @@ approving a background item in System Settings when macOS asks:
 \begin{enumerate}[nosep]
 \item \code{/Applications/F1R3Gaze.app} and \code{/Applications/ign1t10n.app} are
   installed, signed and notarised.
-\item A per-user launch agent, \code{io.f1r3fly.ign1t10n.supervisor}, is registered and
-  running. It supervises two \code{f1r3node} processes: a \emph{validator} in
-  standalone mode that created the shard's genesis, and an \emph{observer}
-  (read-only node) that joined it over loopback.
-\item The validator's key was generated on this machine at install time. The
-  shard's genesis funds the user's active \Gz{} wallet.
-\item \Gz{} is configured with the validator as its deploy target and the observer
-  as its only observer, and is open in a window.
-\item Every listening socket of both nodes is bound to the loopback interface.
+\item A per-user launch agent, \code{io.f1r3fly.ign1t10n.supervisor}, is registered
+  and running. It supervises the shard's nodes:
+  \begin{itemize}[nosep]
+  \item a \emph{bootstrap} node, which coordinated the genesis ceremony and is every
+    other node's rendezvous; it is not bonded and never proposes;
+  \item $N$ \emph{validators}, bonded at genesis, which propose and finalise blocks
+    ($N = 2$ unless the user has chosen otherwise, $2 \le N \le 10$);
+  \item one \emph{observer}, a read-only node that serves every read the browser
+    makes.
+  \end{itemize}
+\item Every key was generated on this machine at install time. The shard's genesis
+  funds the user's active \Gz{} wallet and a local faucet.
+\item \Gz{} deploys to validator~1, reads from the observer, and is open in a window.
+\item Every listening socket of every node is bound to the loopback interface.
 \item The shard survives logout, sleep and reboot, and comes back with its chain
-  intact.
+  intact, at the size last chosen.
 \end{enumerate}
+
+\noindent
+Throughout, ``$N$ nodes'' in the user interface means $N$ validators; the bootstrap
+and the observer are always present and are shown separately. With the default,
+five \code{f1r3node} processes run: bootstrap, two validators, observer.
 
 \subsection{Non-goals for this version}
 
-Multi-validator local shards; joining a remote or public shard; exposing the local
-shard to the network; Linux and Windows (the \Gz{} release already ships those
-installers, but the shard bundle here is macOS-only); bundling the Embers service;
-Docker. Each is compatible with the architecture below and is noted where it would
-enter.
+More than ten validators; joining a remote or public shard; exposing the local shard
+to the network; stake other than equal stakes; Linux and Windows (the \Gz{} release
+already ships those installers, but the shard bundle here is macOS-only); bundling
+the Embers service; Docker.
 
 \subsection{Pinned baselines}
 
@@ -125,9 +140,9 @@ enter.
 \toprule
 Source & Revision & Notes\\
 \midrule
-\Nd{} & \code{master} @ \code{fce422a} & crate \code{node} v0.4.46; toolchain \code{nightly-2026-02-09} (\code{rust-toolchain.toml}); no macOS CI job exists\\
-\Gz{} & \code{main} @ \code{f6ee26a} & ``wallet added''; Rust 1.91, edition 2024; P4 release workflow producing a universal, notarised DMG\\
-\Camp{} & \code{main} @ \code{b46e16c} & consumed only through \Gz{}, which pins branch \code{gaze/map-remainders} @ \code{ea2d323}; that revision is on GitHub, so a clean \Gz{} checkout builds\\
+\Nd{} & \code{master} @ \code{fce422a} & crate \code{node} v0.4.46; toolchain \code{nightly-2026-02-09}; topology reference \code{docker/shard.yml}, \code{docker/conf/default.conf}, \code{docker/conf/bootstrap.conf}; no macOS CI job exists\\
+\Gz{} & \code{main} @ \code{f6ee26a} & Rust 1.91, edition 2024; P4 release workflow producing a universal, notarised DMG; crates \code{gaze-shard} and \code{gaze-wallet} reused by \Hr{}\\
+\Camp{} & \code{main} @ \code{b46e16c} & consumed only through \Gz{}, which pins branch \code{gaze/map-remainders} @ \code{ea2d323}\\
 Publications & \code{f1r3gaze/} & architecture proposal v0.2; implementation specification v0.1 (work package K1 names installers in phase P4)\\
 Publications & \code{fuzzyware/} & background only; nothing in the installer depends on the graded resolver, which \Gz{} does not yet ship\\
 \bottomrule
@@ -142,8 +157,9 @@ Publications & \code{fuzzyware/} & background only; nothing in the installer dep
 \code{\textasciitilde/Library/Application Support/F1R3Gaze} unless
 \code{F1R3GAZE\_PROFILE} is set. \Hr{} names the product: the installer archive,
 the menu-bar application that manages the shard, its binary, its launch agent and
-its repository all carry the one name. Ports are written for the default allocation
-(\S\ref{sec:ports}).
+its repository all carry the one name. ``Slot $k$'' is validator $k$'s place in
+the port plan (\S\ref{sec:ports}); validator~1 is never removed. Ports are written
+for the default allocation.
 
 %======================================================================
 \section{Findings from the code review}\label{sec:findings}
@@ -155,117 +171,138 @@ Every endpoint that runs an exploratory deploy is served only by read-only nodes
 a validator answers \code{400 readonly\_node\_required}. The list
 (\code{docs/node/api-reference.md}) includes \code{POST /api/explore-deploy},
 \code{POST /api/estimate-cost}, \code{GET /api/registry/\{uri\}} and
-\code{GET /api/balance/\{address\}}. \Gz{}'s shard bridge uses exactly these:
-it resolves sites and reads registry values at observers
+\code{GET /api/balance/\{address\}}. \Gz{}'s shard bridge uses exactly these: it
+resolves sites and reads registry values at observers
 (\code{gaze-shard/src/bridge.rs}, \code{graded}), quotes the cost of a deploy by
-\code{estimate\_cost} on the first observer (line 276), subscribes to
-\code{/ws/events} on the first observer, and sends deploys to the validator. A
-standalone validator on its own therefore cannot serve the browser; the observer
-is what makes the local shard readable.
+\code{estimate\_cost} on the first observer, subscribes to \code{/ws/events} on the
+first observer, and sends deploys to the validator.
 \end{finding}
 
-\begin{finding}[The browser's defaults already match the port convention]\label{f:defaults}
-\code{ShardConfig::default()} is validator \code{http://localhost:40403}, observers
-\code{[http://localhost:40453]}, shard id \code{root}, quorum 2, phlo price 1. The
-node's documented port map puts the first node's HTTP API on 40403 and the
-observer's on 40453 (\code{docker/README.md}). With one observer the bridge returns
-the \emph{node} rung and never consults the quorum (\code{bridge.rs}, the
-\code{obs.len() == 1} branch), so quorum 2 is harmless but misleading; the
-installer writes \code{quorum = 1}.
+\begin{finding}[The shipped topologies]\label{f:topology}
+The repository runs two topologies. \emph{Standalone} (\code{docker/standalone.yml}):
+one bonded node that is its own ceremony master, with no peers. \emph{Shard}
+(\code{docker/shard.yml}): a bootstrap node started with
+\code{--ceremony-master-mode}, \code{--required-signatures}, and
+\code{--heartbeat-disabled}, bootstrapping from itself and absent from
+\code{bonds.txt} (``The bootstrap node is NOT a validator'',
+\code{docker/conf/bootstrap.conf}); genesis validators started with
+\code{--genesis-validator} and \code{--bootstrap} pointing at it; and an observer
+bootstrapping from it. Nothing in the repository pairs a standalone node with an
+observer, and that pairing proved awkward in practice; the shard topology is the one
+that is tested (CI smoke, soak runs). This specification adopts the shard topology,
+generalised from three validators to $N$.
 \end{finding}
 
-\begin{finding}[Standalone plus observer is not a shipped topology]\label{f:topology}
-Standalone mode (\code{-s}, \code{standalone = true}) skips the wait for a first
-peer and the heartbeat's new-parents check, and still starts the transport and
-Kademlia servers (\code{node/src/rust/runtime/node\_runtime.rs}, lines 135, 404,
-574; \code{heartbeat\_proposer.rs}, line 818). Nothing in the repository runs an
-observer against a standalone node: \code{docker/observer.yml} bootstraps from the
-multi-validator \code{shard.yml}. The join procedure itself
-(\code{docs/node/joining-a-network.md}) does not depend on the peer's mode, so the
-topology is expected to work, but it is unverified. See
-Obligation~\ref{ob:topology}.
+\begin{finding}[Same host, distinct ports]\label{f:loopback}
+In \code{shard.yml} every node listens on the same six container ports and is told
+apart by its Docker hostname; the host publishes them at 40400, 40410, 40420, 40430
+(and 40440 for \code{validator4.yml}) and 40450 for the observer
+(\code{docker/README.md}, ``Port Mapping''). On one Mac without Docker every node
+must advertise \code{127.0.0.1} and differ by port. The node supports per-node ports
+through configuration and \code{--host}; that a set of nodes on one loopback address
+discover and gossip correctly is expected but untested (Obligation~\ref{ob:topology}).
 \end{finding}
 
-\begin{finding}[The shipped development key is public]\label{f:devkey}
-\code{docker/.env.example} (and the committed \code{docker/.env}) carry
-\code{STANDALONE\_PRIVATE\_KEY}, whose public key is the only bond in
-\code{docker/genesis/standalone-bonds.txt} and whose vault
-\code{1111AtahZ\ldots} holds the whole standalone supply. Any install reusing it
-would give every reader of the repository the validator key and the funds.
+\begin{finding}[The browser's default validator would be the bootstrap]\label{f:defaults}
+\code{ShardConfig::default()} in \Gz{} is validator \code{http://localhost:40403},
+observers \code{[http://localhost:40453]}, shard id \code{root}, quorum 2. In the
+shard topology port 40403 is the \emph{bootstrap}, which is not bonded. A node that
+cannot propose accepts a deploy and strands it, because deploy queues are node-local
+(\code{docs/node/joining-a-network.md}, and \code{/api/pending-deploys} in the API
+reference). \Hr{} therefore always writes \Gz{}'s \code{validator} explicitly, to
+validator~1. With one observer the bridge returns the \emph{node} rung and never
+consults the quorum, so \Hr{} writes \code{quorum = 1}.
+\end{finding}
+
+\begin{finding}[The shard can be resized while running]\label{f:resize}
+The join guide (\code{docs/node/joining-a-network.md}) specifies how a node that was
+not at genesis joins (last-finalised-state fetch from \code{--bootstrap}) and becomes
+a validator: start it already carrying its validator key; fund its vault by transfer
+from a funded key; submit a bond deploy \emph{to a bonded validator}, signed by the
+joiner's own key (\code{rholang/examples/bond/bond.rho}, calling
+\code{PoS!("bond", deployerId, amount, ret)}); the bond takes effect at the next epoch
+boundary, observable at \code{GET /api/bond-status/\{pk\}}. Leaving is the mirror
+image: \code{PoS!("withdraw", deployerId, ret)} (\code{casper/src/main/resources/PoS.rhox},
+line 370) takes the validator out of the active set at the next boundary and pays out
+stake after the quarantine. The shard configuration sets \code{epoch-length = 10}
+and \code{quarantine-length = 10} (\code{docker/conf/default.conf}), so both take
+seconds to a few minutes locally, not the thousands of blocks of the node defaults.
+The guide warns: ``Only bond a validator you intend to keep running. A bonded
+validator that does not propose is counted in consensus while contributing nothing
+to it.''
+\end{finding}
+
+\begin{finding}[Deploys can be signed outside the node]\label{f:signing}
+\Gz{}'s \code{gaze-shard} produces deploys byte-for-byte as the node verifies them
+(tested against \code{prost}), and \code{gaze-wallet} renders the vault transfer
+template (\code{render\_transfer}) and derives F1R3Cap addresses. \Hr{} reuses both
+crates, pinned to the \Gz{} release it ships, for faucet transfers, bond and withdraw
+deploys, so it needs neither the node's \code{deploy} subcommand nor an external
+client.
+\end{finding}
+
+\begin{finding}[The shipped development keys are public]\label{f:devkey}
+\code{docker/.env.example} (and the committed \code{docker/.env}) carry the private
+keys of the bootstrap, four validators and the standalone node; their public keys are
+the entries of \code{docker/genesis/bonds.txt} and \code{standalone-bonds.txt}, and
+the vaults they control hold the genesis supply. Any install reusing them would give
+every reader of the repository the validator keys and the funds.
 \end{finding}
 
 \begin{finding}[How a key can reach the node]\label{f:keypath}
 \code{--validator-private-key} puts the key in the process's argument vector, which
-any local user can read with \code{ps}. \code{--validator-private-key-path} takes an
-encrypted PEM, decrypted with OpenSSL (\code{crypto/src/rust/signatures/secp256k1.rs},
-\code{parse\_pem\_file}); the password comes from the environment variable
-\code{F1R3NODE\_VALIDATOR\_PASSWORD}, or else from an interactive prompt
-(\code{node/src/rust/effects/console\_io.rs}). The environment of another user's
-process is not readable without privilege on macOS.
+any local user can read with \code{ps}; \code{shard.yml} uses it, which is harmless in
+a container but not on a shared Mac. \code{--validator-private-key-path} takes an
+encrypted PEM, decrypted with OpenSSL (\code{Secp256k1::parse\_pem\_file}); the
+password comes from \code{F1R3NODE\_VALIDATOR\_PASSWORD}, or else from an
+interactive prompt (\code{node/src/rust/effects/console\_io.rs}).
 \end{finding}
 
 \begin{finding}[Everything listens on all interfaces]\label{f:bind}
-\code{api-server.host} defaults to \code{0.0.0.0} (\code{defaults.conf}) and is
-configurable. The protocol transport binds \code{0.0.0.0} unconditionally
-(\code{comm/src/rust/transport/grpc\_transport\_receiver.rs}, line 600). On a
-laptop that would expose the internal gRPC API (which proposes blocks), the admin
-API and the peer protocol to whatever network the machine joins, and would trigger
-the application-firewall prompt.
+\code{api-server.host} defaults to \code{0.0.0.0} and is configurable. The protocol
+transport binds \code{0.0.0.0} unconditionally
+(line 600 of \code{grpc\_transport\_receiver.rs} in \code{comm/src/rust/transport}). With up to
+twelve nodes, that would be up to seventy-two sockets, including internal gRPC
+(propose) and admin APIs, open to whatever network the laptop joins.
 \end{finding}
 
 \begin{finding}[Native linking on macOS]\label{f:linking}
 The \code{crypto} crate depends on \code{openssl 0.10} without the \code{vendored}
 feature, so a macOS build links Homebrew's \code{libssl}/\code{libcrypto}
-dynamically; a binary built that way does not run on a Mac without Homebrew.
-LMDB is compiled from source through \code{heed}; \code{aws-lc-sys},
-\code{zstd-sys} and \code{bzip2-sys} link statically. \code{protoc} is a
-build-time requirement only. The repository's workflows build Linux and OCI
-artifacts; none builds for macOS.
+dynamically. LMDB is compiled from source through \code{heed}; \code{aws-lc-sys},
+\code{zstd-sys} and \code{bzip2-sys} link statically. \code{protoc} is build-time
+only. No workflow in the repository builds for macOS.
 \end{finding}
 
 \begin{finding}[\Gz{} already packages itself for macOS]\label{f:gazepkg}
-\code{packaging/macos/package.sh} builds a universal (\code{lipo}) bundle,
-\code{io.f1r3fly.f1r3gaze}, minimum macOS 11, signs it with the hardened runtime
-and \emph{empty} entitlements (there is no JavaScript, hence no JIT), wraps it in a
-signed DMG, notarises and staples it. Release secrets are \code{MACOS\_CERT\_P12},
-\code{MACOS\_CERT\_PASSWORD}, \code{MACOS\_SIGN\_IDENTITY}, \code{APPLE\_ID},
-\code{APPLE\_TEAM\_ID}, \code{APPLE\_APP\_PASSWORD}. Wallet keys live in the
-Keychain under service \code{F1R3Gaze} (\code{os-keyring}, on in release builds).
-\end{finding}
-
-\begin{finding}[\Gz{} settings: last assignment wins]\label{f:settings}
-\code{settings.conf} is \code{key = value}; \code{Settings::parse} walks the lines
-in order and each recognised key overwrites the previous value
-(\code{gaze-shell/src/profile.rs}). If the file is absent at first load, \Gz{}
-writes a commented template. A block appended at the end of the file therefore
-governs the keys it sets without disturbing the rest.
+\code{packaging/macos/package.sh} builds a universal bundle,
+\code{io.f1r3fly.f1r3gaze}, minimum macOS 11, signed with the hardened runtime and
+\emph{empty} entitlements, in a signed, notarised, stapled DMG. Wallet keys live in
+the Keychain under service \code{F1R3Gaze}. \code{settings.conf} is
+\code{key = value} and the last assignment of a key wins
+(\code{gaze-shell/src/profile.rs}); if the file is absent at first load \Gz{} writes a
+commented template.
 \end{finding}
 
 \begin{finding}[The browser's wallet can be funded at genesis]\label{f:wallet}
-\Gz{} wallet addresses are F1R3Cap addresses, base58 of a four-zero-byte prefix,
-a Keccak-derived hash and a Blake2b checksum (\code{gaze-wallet/src/address.rs}),
-the same form as the vault addresses in the node's \code{wallets.txt}. The active
-wallet signs, and pays for, every deploy the browser makes. Balances and transfers
-go through Embers only; with \code{embers\_api} unset the wallet panel reports
-that balances need Embers.
+\Gz{} wallet addresses are F1R3Cap addresses, the same base58 form as the vault
+addresses in the node's \code{wallets.txt}. The active wallet signs, and pays for,
+every deploy the browser makes. Balances and transfers go through Embers only; with
+\code{embers\_api} unset the wallet panel reports that balances need Embers.
 \end{finding}
 
 \begin{finding}[Lifecycle facts]\label{f:lifecycle}
-The node handles \code{SIGTERM} and \code{SIGINT} (\code{node\_runtime.rs}, around
-line 908). A joined node restarted on the same data directory reconnects in about
-a second; its identity is the TLS certificate in the data directory, so a data
-directory must never be deleted while peers remember it
-(\code{joining-a-network.md}). Log output is governed by the \code{logging} block
-(sink, format, rotation, retention). The node reads \code{OPENAI\_ENABLED} and
-\code{OLLAMA\_ENABLED} from the environment. \Gz{} does not yet handle
-\code{f1r3://} links opened from other macOS applications (its README, ``Not in
-this release'').
+The node handles \code{SIGTERM} and \code{SIGINT}. A joined node restarted on the same
+data directory reconnects in about a second; its identity is the TLS certificate in
+the data directory, so a data directory must never be deleted while peers remember it.
+The genesis ceremony in \code{default.conf} checks for signatures every 10\,s
+(\code{approve-interval}) and waits at most a minute (\code{approve-duration}).
 \end{finding}
 
 %======================================================================
 \section{Architecture}\label{sec:arch}
 
-\begin{figure}[h]
+\begin{figure}[htbp]
 \centering
 \resizebox{\linewidth}{!}{\begin{tikzpicture}[
   box/.style={draw, rounded corners=2pt, align=center, font=\small, inner sep=5pt, minimum height=9mm},
@@ -274,22 +311,29 @@ this release'').
   lab/.style={font=\scriptsize, fill=white, inner sep=1pt}
 ]
 \node[box, fill=black!5] (pkg) {\code{ign1t10n-}$v$\code{-macos-universal.pkg}\\\scriptsize Developer ID Installer, notarised};
-\node[box, below left=12mm and 6mm of pkg] (gaze) {\code{F1R3Gaze.app}\\\scriptsize browser (unchanged bundle)};
-\node[box, below right=12mm and 6mm of pkg] (ign) {\code{ign1t10n.app}\\\scriptsize menu bar; \code{ign1t10n}, \code{f1r3node}};
+\node[box, below left=12mm and 10mm of pkg] (gaze) {\code{F1R3Gaze.app}\\\scriptsize browser (unchanged bundle)};
+\node[box, below right=12mm and 10mm of pkg] (ign) {\code{ign1t10n.app}\\\scriptsize menu bar, configuration panel;\\\scriptsize \code{ign1t10n}, \code{f1r3node}};
 \draw[arr] (pkg) -- node[lab]{installs} (gaze);
 \draw[arr] (pkg) -- node[lab]{installs} (ign);
-\node[box, below=12mm of ign] (sup) {launch agent \code{io.f1r3fly.ign1t10n.supervisor}\\\code{ign1t10n supervise}};
+\node[box, below=10mm of ign] (sup) {launch agent \code{io.f1r3fly.ign1t10n.supervisor}\\\code{ign1t10n supervise}};
 \draw[arr] (ign) -- node[lab]{SMAppService} (sup);
-\node[box, below left=12mm and -18mm of sup, fill=yellow!10] (val) {validator (standalone)\\\scriptsize 127.0.0.1:40400--40405};
-\node[box, below right=12mm and -18mm of sup, fill=cyan!8] (obs) {observer (read-only)\\\scriptsize 127.0.0.1:40450--40455};
-\draw[arr] (sup) -- node[lab]{spawns} (val);
-\draw[arr] (sup) -- node[lab]{spawns} (obs);
-\draw[arr, <->] (val) -- node[lab]{protocol, LFS join, blocks} (obs);
-\draw[arr] (gaze.south) |- node[lab, pos=0.75]{deploys :40403} ($(val.west)+(0,0.1)$);
-\node[grp, fit=(val)(obs)(sup), label={[font=\scriptsize]above left:per-user, loopback only}] (g) {};
-\draw[arr, dashed] ($(gaze.south)+(-0.5,0)$) |- node[lab, pos=0.75]{reads, cost estimates, events :40453} ($(obs.south)+(0,-1.0)$) -- (obs.south);
+\node[box, below=14mm of sup, fill=black!4] (boot) {bootstrap\\\scriptsize ceremony master, unbonded\\\scriptsize :40400--40405};
+\node[box, left=6mm of boot, fill=yellow!10] (v1) {validator 1\\\scriptsize :40410--40415};
+\node[box, left=4mm of v1, fill=yellow!10] (v2) {validator 2\\\scriptsize :40420--40425};
+\node[box, left=4mm of v2, fill=yellow!4, dashed] (vn) {validators 3..$N$\\\scriptsize optional, $N\le 10$};
+\node[box, right=6mm of boot, fill=cyan!8] (obs) {observer\\\scriptsize read-only\\\scriptsize :40450--40455};
+\draw[arr] (sup) -- node[lab]{spawns all} (boot);
+\draw[arr, <->] (boot) -- (v1);
+\draw[arr, <->] (boot) -- (obs);
+\draw[arr, <->] (v1) -- (v2);
+\draw[arr, <->, dashed] (v2) -- (vn);
+\node[grp, fit=(vn)(v1)(v2)(boot)(obs)(sup), label={[font=\scriptsize]above left:per-user, loopback only}] (g) {};
+\draw[arr] (gaze.south) |- node[lab, pos=0.72]{deploys :40413} ($(v1.north)+(0,0.55)$) -- (v1.north);
+\draw[arr, dashed] ($(gaze.south)+(-0.6,0)$) |- node[lab, pos=0.8]{reads, cost estimates, events :40453} ($(obs.south)+(0,-1.0)$) -- (obs.south);
 \end{tikzpicture}}
-\caption{What the installer lays down and what runs afterwards.}
+\caption{What the installer lays down and what runs afterwards, for the default
+$N=2$. Arrows between nodes indicate the peer protocol; every node discovers every
+other through the bootstrap.}
 \label{fig:arch}
 \end{figure}
 
@@ -297,16 +341,17 @@ this release'').
 
 \begin{center}\small
 \renewcommand{\arraystretch}{1.15}
-\begin{tabularx}{\linewidth}{@{}p{3.3cm}X@{}}
+\begin{tabularx}{\linewidth}{@{}p{3.1cm}X@{}}
 \toprule
 Component & Role\\
 \midrule
-\code{F1R3Gaze.app} & The \Gz{} release bundle, byte for byte. The installer does not rebuild or re-sign it.\\
-\code{ign1t10n.app} & New. Menu-bar application that provisions, starts, stops, resets and reports on the local shard. Contains \code{ign1t10n} (one Rust binary with three roles) and \code{f1r3node} (the \Nd{} \code{node} binary, universal).\\
-launch agent & \code{io.f1r3fly.ign1t10n.supervisor}, registered from inside the \Hr{} bundle with \code{SMAppService}; runs \code{ign1t10n supervise}, which owns both node processes.\\
-validator & \code{f1r3node run --standalone}; created the genesis; the only bonded validator; receives deploys.\\
-observer & \code{f1r3node run} with no validator key; joined the validator by the last-finalised-state protocol; serves every read the browser makes.\\
-state directory & Keys, genesis files, node configurations, both data directories, the manifest \code{shard.toml}, the control socket.\\
+\code{F1R3Gaze.app} & The \Gz{} release bundle, byte for byte.\\
+\code{ign1t10n.app} & Menu-bar application with a configuration panel; provisions, starts, stops, resizes, resets and reports on the local shard. Contains \code{ign1t10n} (one Rust binary with three roles) and \code{f1r3node} (the \Nd{} \code{node} binary, universal).\\
+launch agent & \code{io.f1r3fly.ign1t10n.supervisor}; runs \code{ign1t10n supervise}, which owns every node process.\\
+bootstrap & \code{f1r3node run} as ceremony master with \code{--required-signatures} $N_0$ (the genesis size), heartbeat disabled; not in \code{bonds.txt}; every other node's \code{--bootstrap}.\\
+validators $1..N$ & \code{f1r3node run} with a validator key; genesis validators also \code{--genesis-validator}. Validator~1 receives \Gz{}'s deploys and \Hr{}'s administrative deploys.\\
+observer & \code{f1r3node run} with no validator key; serves every read.\\
+faucet & A key held by \Hr{}, never by a node, whose vault holds the undistributed genesis supply; funds joining validators and ``Fund a wallet''.\\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -315,37 +360,40 @@ state directory & Keys, genesis files, node configurations, both data directorie
 
 \begin{principle}[Per-user, unprivileged at run time]
 Administrator rights are used once, by Installer.app, to copy two bundles into
-\code{/Applications}. Everything after that runs as the logged-in user. Two users
-of one Mac each get their own shard.
+\code{/Applications}. Everything after that runs as the logged-in user.
 \end{principle}
 
 \begin{principle}[Loopback only]
-No socket of either node listens on a non-loopback address. The local shard is a
-private instrument, not a network service.
+No socket of any node listens on a non-loopback address.
 \end{principle}
 
 \begin{principle}[Fresh secrets]
-Every secret is generated on the user's machine at provisioning time. No key,
-password or seed is shipped in any artifact.
+Every key and password is generated on the user's machine. None is shipped.
 \end{principle}
 
 \begin{principle}[One owner for the shard]
-A single supervisor starts, orders, monitors and stops both nodes. launchd keeps
-the supervisor alive; the supervisor keeps the nodes alive. Two independent launch
-agents were rejected because launchd has no dependency ordering and the observer's
-bootstrap address depends on the validator having started.
+A single supervisor starts, orders, monitors, resizes and stops every node. launchd
+keeps the supervisor alive; the supervisor keeps the nodes alive. Per-node launch
+agents were rejected: launchd has no dependency ordering, and resizing must be one
+transaction over several nodes.
+\end{principle}
+
+\begin{principle}[A bonded validator runs]
+A validator in the active set is never stopped on its own. Removing a validator means
+withdrawing it first and stopping it only after it has left the active set
+(Finding~\ref{f:resize}). The shard as a whole may be stopped; all validators then
+stop together.
 \end{principle}
 
 \begin{principle}[Touch only what was created]
-The installer and \Hr{} never delete or overwrite data they did not create. In
-particular they never remove a \Gz{} wallet, never edit \Gz{} settings outside
-their own managed block, and never use \code{\textasciitilde/.rnode}.
+\Hr{} never deletes or overwrites data it did not create: never a \Gz{} wallet, never
+\Gz{} settings outside its own managed block, never \code{\textasciitilde/.rnode}.
 \end{principle}
 
-\begin{principle}[Idempotent provisioning]
-Provisioning is a sequence of stages whose completion is recorded in
-\code{shard.toml}. Interrupted at any point (power loss, quit, crash) it resumes at
-the first incomplete stage.
+\begin{principle}[Idempotent, resumable operations]
+Provisioning and every resize are sequences of steps whose completion is recorded in
+\code{shard.toml}. Interrupted at any point, each resumes at its first incomplete
+step.
 \end{principle}
 
 %======================================================================
@@ -353,23 +401,20 @@ the first incomplete stage.
 
 \begin{requirement}[Product archive]
 The release artifact \MUST{} be a flat product archive,
-\code{ign1t10n-}$v$\code{-macos-universal.pkg}, built with \code{productbuild}
-from two component packages (\code{io.f1r3fly.f1r3gaze.pkg},
+\code{ign1t10n-}$v$\code{-macos-universal.pkg}, built with \code{productbuild} from
+two component packages (\code{io.f1r3fly.f1r3gaze.pkg},
 \code{io.f1r3fly.ign1t10n.pkg}), signed with a \emph{Developer ID Installer}
-certificate, notarised, and stapled. Each component package \MUST{} install its
-bundle to \code{/Applications} with bundle-version checking on, so that an
-installed newer \Gz{} is not downgraded.
+certificate, notarised, and stapled. Each component \MUST{} install its bundle to
+\code{/Applications} with bundle-version checking on, so an installed newer \Gz{} is
+not downgraded.
 \end{requirement}
 
-A DMG with two applications was considered and rejected: drag-and-drop cannot
-launch anything, and the brief asks that the install end with the shard and the
-browser running. A product archive delivers both bundles in one confirmation and
-has a post-install hook.
+A DMG was rejected because drag-and-drop cannot launch anything, and the brief asks
+that the install end with the shard and the browser running.
 
 \begin{requirement}[The post-install hook does one thing]
-The \code{postinstall} script of the component package
-\code{io.f1r3fly.ign1t10n.pkg} \MUST{} do nothing but launch \Hr{} in the console
-user's session:
+The \code{postinstall} script of the component package \code{io.f1r3fly.ign1t10n.pkg}
+\MUST{} do nothing but launch \Hr{} in the console user's session:
 \begin{lstlisting}[language=bash]
 #!/bin/bash
 user=$(stat -f %Su /dev/console)
@@ -379,26 +424,20 @@ launchctl asuser "$uid" sudo -u "$user" \
   open -g -a /Applications/ign1t10n.app --args --first-run
 exit 0
 \end{lstlisting}
-It \MUSTNOT{} create files in the user's home, register agents, or generate keys:
-all of that is provisioning, performed by \Hr{} as the user (\S\ref{sec:prov}).
-The script \MUST{} exit 0 even if the launch fails, so that a headless install
-(MDM, \code{installer -pkg} over SSH) succeeds and provisioning happens at first
-launch.
+It \MUSTNOT{} create files in the user's home, register agents or generate keys. It
+\MUST{} exit 0 even if the launch fails, so a headless install succeeds and
+provisioning happens at first launch.
 \end{requirement}
 
 \begin{requirement}[Platforms]
 The artifact \MUST{} run on Apple silicon and \SHOULD{} run on Intel
-(Decision~\ref{dec:arch}); every Mach-O in it is universal. The minimum macOS is
-13.0, the first release with \code{SMAppService} (Decision~\ref{dec:macos}).
-\Hr{}'s \code{Info.plist} sets \code{LSMinimumSystemVersion} to 13.0; \Gz{}'s
-own minimum (11.0) is unaffected, and the distribution definition sets
-\code{allowed-os-versions} to 13.0 and later.
+(Decision~\ref{dec:arch}); every Mach-O is universal. The minimum macOS is 13.0, the
+first release with \code{SMAppService} (Decision~\ref{dec:macos}).
 \end{requirement}
 
 \begin{requirement}[No dynamic dependencies outside the system]
 For every Mach-O in the archive, \code{otool -L} \MUST{} list only paths under
-\code{/usr/lib} and \code{/System/Library}. The release pipeline enforces this
-(\S\ref{sec:pipeline}); it is the check that catches Finding~\ref{f:linking}.
+\code{/usr/lib} and \code{/System/Library}.
 \end{requirement}
 
 %======================================================================
@@ -409,46 +448,41 @@ For every Mach-O in the archive, \code{otool -L} \MUST{} list only paths under
 \begin{lstlisting}
 ign1t10n.app/Contents/
   Info.plist                    io.f1r3fly.ign1t10n, LSUIElement = true, min 13.0
-  MacOS/ign1t10n              menu bar (default), `supervise`, `ctl`
+  MacOS/ign1t10n                menu bar (default), `supervise`, `ctl`
   Helpers/f1r3node              f1r3node-rust `node` v0.4.46, universal
   Library/LaunchAgents/io.f1r3fly.ign1t10n.supervisor.plist
   Resources/
-    ign1t10n.icns, StatusTemplate.pdf   F1R3FLY.io brand kit (firefly bug)
-    templates/validator.conf.in, observer.conf.in, gaze-settings.in
+    ign1t10n.icns, StatusTemplate.pdf     F1R3FLY.io brand kit (firefly bug)
+    templates/common.conf.in, bootstrap.conf.in, validator.conf.in,
+              observer.conf.in, gaze-settings.in, bond.rho, withdraw.rho
     compat.toml                 node versions whose data directories are compatible
     uninstall.sh
-  _CodeSignature/ ...
 \end{lstlisting}
 
 \subsection{One binary, three roles}
 
-\code{ign1t10n} is written in Rust (stable 1.91, matching \Gz{}), using
-\code{objc2} bindings for AppKit (status item, first-run window),
-ServiceManagement (\code{SMAppService}) and Security (Keychain), \code{k256} and
-\code{pkcs8} for key generation and encryption, \code{toml} and \code{serde} for
-the manifest, and a blocking HTTP client for the node APIs. Rust keeps the
-supervisor, the key code and the configuration generator testable on Linux CI;
-only the thin UI and ServiceManagement layer is macOS-specific
-(Decision~\ref{dec:lang}).
+\code{ign1t10n} is written in Rust (stable 1.91, matching \Gz{}), using \code{objc2}
+bindings for AppKit, ServiceManagement and Security; \code{k256} and \code{pkcs8} for
+keys; \code{gaze-shard} and \code{gaze-wallet} for deploys, transfers and addresses
+(Finding~\ref{f:signing}); \code{toml} and \code{serde} for the manifest; a blocking
+HTTP client for the node APIs.
 
 \begin{description}[leftmargin=1.5em,style=nextline]
-\item[\code{ign1t10n} (no arguments)] The menu-bar application. On first run
-  (\code{--first-run}, or \code{shard.toml} absent or incomplete) it opens the
-  first-run window and drives provisioning. It never runs a node itself; it talks
-  to the supervisor over the control socket.
-\item[\code{ign1t10n supervise}] The launch agent's program. Owns the two node
-  processes (\S\ref{sec:supervise}). Writes status to the control socket.
+\item[\code{ign1t10n} (no arguments)] The menu-bar application and the configuration
+  panel. On first run it opens the first-run window and drives provisioning. It never
+  runs a node itself; it talks to the supervisor over the control socket.
+\item[\code{ign1t10n supervise}] The launch agent's program. Owns every node process
+  and executes resizes (\S\ref{sec:supervise}, \S\ref{sec:resize}).
 \item[\code{ign1t10n ctl} \textit{verb}] A command-line client of the control
   socket: \code{status [--json]}, \code{start}, \code{stop}, \code{restart},
-  \code{logs [validator|observer|ign1t10n]}, \code{env} (prints the endpoint URLs and
-  the shard id for scripts), \code{reset}, \code{uninstall}. It is what the tests
-  drive.
+  \code{resize} \textit{N} \code{[--new-shard]}, \code{fund} \textit{address amount},
+  \code{logs} \textit{node}, \code{env}, \code{reset}, \code{uninstall}. It is what the
+  tests drive.
 \end{description}
 
 The control socket is \code{run/control.sock} in the state directory, a Unix-domain
-socket in a \code{0700} directory, carrying one JSON object per line. The
-supervisor \MUST{} check the peer's user id (\code{getpeereid}) and refuse any
-other user.
+socket in a \code{0700} directory carrying one JSON object per line. The supervisor
+\MUST{} check the peer's user id (\code{getpeereid}) and refuse any other user.
 
 \subsection{The launch agent}
 
@@ -461,369 +495,459 @@ other user.
   <key>KeepAlive</key>          <dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key>        <string>Standard</string>
   <key>ThrottleInterval</key>   <integer>10</integer>
-  <key>ExitTimeOut</key>        <integer>120</integer>
+  <key>ExitTimeOut</key>        <integer>180</integer>
   <key>AssociatedBundleIdentifiers</key> <string>io.f1r3fly.ign1t10n</string>
 </dict>
 \end{lstlisting}
 
-\code{ProcessType} is \code{Standard}, not \code{Background}: launchd throttles
-CPU and I/O of background jobs, which would slow block execution. \code{KeepAlive}
-restarts the supervisor after a crash but not after a deliberate stop, which exits
-0. \code{ExitTimeOut} gives the supervisor time for the ordered shutdown of
-\S\ref{sec:shutdown} before launchd escalates to \code{SIGKILL}.
+\code{ProcessType} is \code{Standard}, because launchd throttles CPU and I/O of
+background jobs. \code{ExitTimeOut} covers the ordered shutdown of up to twelve nodes
+(\S\ref{sec:shutdown}).
 
 \subsection{The state directory}
 
 \begin{lstlisting}
-~/Library/Application Support/F1R3FLY/ign1t10n/        0700
+~/Library/Application Support/F1R3FLY/ign1t10n/     0700
   shard.toml                    the manifest (Appendix B)
-  keys/validator.pem            encrypted PKCS#8, 0600
+  keys/bootstrap.pem, validator-1.pem ... validator-10.pem, faucet.pem   0600
   genesis/bonds.txt, wallets.txt
-  conf/validator.conf, observer.conf
-  validator/                    storage.data-dir of the validator (TLS identity, LMDB, logs/)
-  observer/                     storage.data-dir of the observer
+  conf/common.conf, bootstrap.conf, validator-<k>.conf, observer.conf
+  nodes/bootstrap/, nodes/validator-<k>/, nodes/observer/   data directories
   run/control.sock, supervisor.pid
-  archive/<timestamp>/          previous shards kept on reset or incompatible upgrade
+  archive/<timestamp>/          retired validators and previous shards
 ~/Library/Logs/F1R3FLY/ign1t10n/
-  ign1t10n.log                    supervisor and UI; 10 MB x 5
-  validator.stdout.log, observer.stdout.log   panics and pre-logger output; 10 MB x 3
+  ign1t10n.log                  supervisor and UI; 10 MB x 5
+  <node>.stdout.log             one per node; panics and pre-logger output; 10 MB x 3
 \end{lstlisting}
 
-\subsection{Keychain items}
+\subsection{Keys and Keychain items}
 
-\begin{center}\small
-\begin{tabularx}{\linewidth}{@{}p{3.7cm}p{4.2cm}X@{}}
-\toprule
-Service & Account & Content\\
-\midrule
-\code{io.f1r3fly.ign1t10n} & \code{validator-pem-password} & 32 random bytes, hex; the password of \code{keys/validator.pem}\\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-The item is created by \code{ign1t10n} and its access control list is the
-application's designated requirement, so the menu bar, the supervisor and
-\code{ctl} (one binary) read it without a prompt and other programs cannot. The
-private key itself is never in the Keychain, never on a command line and never in
-a log; it exists in plaintext only in the node's memory. \Gz{}'s wallet keys stay
-in \Gz{}'s own Keychain items; \Hr{} never reads them.
+Every key is a secp256k1 key written as an \code{ENCRYPTED PRIVATE KEY} PEM (PKCS\#8,
+PBES2, PBKDF2-HMAC-SHA256 with 600\,000 iterations, AES-256-CBC), which OpenSSL
+decrypts and \code{parse\_pem\_file} accepts. Each PEM has its own random 32-byte
+password in a Keychain item of service \code{io.f1r3fly.ign1t10n}, account
+\code{pem.}\textit{name} (\code{pem.bootstrap}, \code{pem.validator-3},
+\code{pem.faucet}, \ldots). The items' access control list is the application's
+designated requirement, so the menu bar, supervisor and \code{ctl} (one binary) read
+them without a prompt and other programs cannot. A node receives its password only in
+its own environment; the faucet key is decrypted only inside \Hr{} when it signs.
 
 %======================================================================
 \section{Provisioning}\label{sec:prov}
 
 Provisioning runs in the menu-bar process, as the user, when \code{shard.toml} is
-absent or records an incomplete stage. Each stage below ends by recording itself in
-\code{shard.toml}'s \code{[stages]} table; a stage that finds its postcondition
-already true records itself and moves on.
+absent or records an incomplete stage. It creates a shard of $N_0$ validators, $N_0$
+being 2 unless the first-run window's ``Advanced'' disclosure was used to choose
+another value in $[2, 10]$.
 
 \subsection{S0: preflight}
 Checks: macOS $\ge$ 13; \code{F1R3Gaze.app} present with bundle identifier
-\code{io.f1r3fly.f1r3gaze} and a valid signature from the same team as \Hr{};
-at least 10\,GB free on the volume holding the home directory (warn below 20\,GB);
-the state directory creatable. A failure stops provisioning with a specific message
-and a ``Try again'' button.
+\code{io.f1r3fly.f1r3gaze} and a valid signature from the same team as \Hr{}; free
+disk of at least $D_{\min}(N_0)$ and physical memory of at least $M_{\min}(N_0)$
+(\S\ref{sec:budget}); the state directory creatable.
 
 \subsection{S1: ports}\label{sec:ports}
 Each node needs six ports (protocol, gRPC external, gRPC internal, HTTP, discovery,
-admin). The default allocation is the node's own convention, which is also
-\Gz{}'s default (Finding~\ref{f:defaults}):
+admin) at offsets $+0\ldots{+5}$ from a base. The port plan follows the node's own
+convention (Finding~\ref{f:loopback}) and keeps the observer where \Gz{} expects it:
 
 \begin{center}\small
-\begin{tabular}{@{}lcccccc@{}}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{}lccl@{}}
 \toprule
-Node & protocol & gRPC ext & gRPC int & HTTP & discovery & admin\\
+Node & base & HTTP & note\\
 \midrule
-validator & 40400 & 40401 & 40402 & 40403 & 40404 & 40405\\
-observer & 40450 & 40451 & 40452 & 40453 & 40454 & 40455\\
+bootstrap & 40400 & 40403 & \\
+validator 1--4 & 40410, 40420, 40430, 40440 & 40413, \ldots, 40443 & as \code{shard.yml}, \code{validator4.yml}\\
+observer & 40450 & 40453 & \Gz{}'s default observer\\
+validator 5--10 & 40460, 40470, \ldots, 40510 & 40463, \ldots, 40513 & skips the observer's decade\\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \noindent
-A block is usable if all six ports bind on \code{127.0.0.1}. If a default block is
-taken (commonly by a Docker shard from \code{docker/shard.yml}, whose ports are
-published on all interfaces), try bases $b+1000k$ for $k = 1,\ldots,9$, keeping
-the $+0\ldots+5$ offsets; the validator and observer are allocated independently.
-The chosen bases are recorded and reused on every start; they change only on
-explicit reallocation (\S\ref{sec:portfail}).
+A base is usable if its six ports bind on \code{127.0.0.1}. Each node's base is
+allocated independently: the plan's base if usable, otherwise the first usable base in
+$41400, 41410, \ldots, 49990$. Allocated bases are recorded per node in
+\code{shard.toml} and reused on every start; slots not yet in use are not reserved.
 
 \subsection{S2: the paying wallet}
-The shard's genesis must fund the wallet \Gz{} will pay with
-(Finding~\ref{f:wallet}). Using the interface of work package G1:
-\begin{enumerate}[nosep]
-\item \code{f1r3gaze wallet active --porcelain}; if it prints an address, use it.
-\item Otherwise \code{f1r3gaze wallet new "Local shard" --porcelain}, which creates
-  a wallet, makes it active (it is the first), and prints its address.
-\end{enumerate}
-Both run the \Gz{} binary inside \code{F1R3Gaze.app} with the user's profile. The
-address is recorded as \code{wallet.funded}. \Hr{} never sees the key.
+Using work package G1: \code{f1r3gaze wallet active --porcelain}; if there is no active
+wallet, \code{f1r3gaze wallet new "Local shard" --porcelain}. The address is recorded
+as \code{wallet.funded}. \Hr{} never sees the key.
 
-\subsection{S3: the validator key}
-Generate a secp256k1 key from the operating system's random source (\code{k256},
-\code{OsRng}). Generate a 32-byte password, store it in the Keychain item above,
-and write the key as an \code{ENCRYPTED PRIVATE KEY} PEM: PKCS\#8 with PBES2,
-PBKDF2-HMAC-SHA256 (600\,000 iterations) and AES-256-CBC, which OpenSSL decrypts
-and \code{Secp256k1::parse\_pem\_file} accepts (Finding~\ref{f:keypath}). Record the
-uncompressed public key (\code{04}\ldots, 130 hex digits) and its F1R3Cap address.
-A unit test \MUST{} round-trip a key generated this way through
-\code{parse\_pem\_file} from the pinned \Nd{} revision.
+\subsection{S3: keys}
+Generate keys for the bootstrap (which signs as ceremony master but is not bonded), for
+validators $1..N_0$, and for the faucet, each with its PEM and Keychain item. Record
+every public key and F1R3Cap address. A unit test \MUST{} round-trip a PEM written
+this way through \code{parse\_pem\_file} from the pinned \Nd{}.
 
 \subsection{S4: genesis files}
 \begin{lstlisting}[language=Conf]
-# genesis/bonds.txt: <validator public key> <stake>
+# genesis/bonds.txt: <public key> <stake>, one line per genesis validator (not the bootstrap)
 04a1...9e 1000
+04c7...31 1000
 # genesis/wallets.txt: <F1R3Cap address>,<balance in dust>   (8 decimals)
-<wallet.funded>,100000000000000         # 1 000 000 F1R3 for the browser's wallet
-<validator address>,49900000000000000   # the rest of the dev supply: the local faucet
+<wallet.funded>,100000000000000        # 1 000 000 F1R3: the browser's wallet
+<validator 1 address>,100000000000     # 1 000 F1R3 each: fees for its own withdraw
+<validator 2 address>,100000000000
+<faucet address>,49800000000000000     # the rest of the dev supply
 \end{lstlisting}
-The amounts are Decision~\ref{dec:amounts}. The validator's vault is funded so that
-the ``Fund wallet'' action (\S\ref{sec:ui}) can transfer to other \Gz{} wallets
-later without a new genesis.
+The amounts are Decision~\ref{dec:amounts}; the faucet's balance leaves room for eight
+further validators' stakes and fees.
 
 \subsection{S5: node configurations}
-Render \code{conf/validator.conf} and \code{conf/observer.conf} from the bundle's
-templates (Appendix A). Both set: the data directory and TLS paths inside the state
-directory; the six ports; \code{api-server.host = "127.0.0.1"}; the bind address of
-work package N1; the network id \code{ign1t10n-}\textit{8 random hex digits} (fresh at
-each genesis, so that no other local shard can ever be mistaken for this one); the
-shard name \code{root}; \code{logging} to file, JSON, daily rotation, 7 files. The
-validator adds the standalone and genesis-ceremony blocks of
-\code{run-local/conf/standalone.conf}; the observer disables the heartbeat and has no
-ceremony block. Finality parameters (\code{fault-tolerance-threshold = 0.0}) are the
-same in both.
+Render \code{conf/common.conf} (network id \code{ign1t10n-}\textit{8 random hex
+digits}, fresh at each genesis; shard name \code{root}; the consensus, genesis and
+epoch parameters of \code{docker/conf/default.conf} with \code{required-signatures}
+$= N_0$; logging; loopback binding) and one small file per node that includes it and
+sets that node's ports, data directory and role (Appendix A).
 
 \subsection{S6: register the agent}
-\code{SMAppService.agent(plistName: "io.f1r3fly.ign1t10n.supervisor.plist").register()}.
-If the status is \code{requiresApproval}, the first-run window explains that macOS
-asks for approval of background items, and offers a button that calls
-\code{SMAppService.openSystemSettingsLoginItems()}; provisioning waits, polling the
-status each second, and continues when the status becomes \code{enabled}.
+\code{SMAppService.agent(plistName: "io.f1r3fly.ign1t10n.supervisor.plist").register()};
+if the status is \code{requiresApproval}, the first-run window explains and offers
+\code{SMAppService.openSystemSettingsLoginItems()}, then waits for \code{enabled}.
 
-\subsection{S7: first start}
-The supervisor, now running, performs its normal start (\S\ref{sec:start}) and
-additionally records, from the validator's \code{GET /api/status}, the node id in
-its \code{address} field, and the genesis block hash from
-\code{GET /api/last-finalized-block} at height 0. The first-run window shows each
-sub-step.
+\subsection{S7: genesis}
+The supervisor performs the genesis start:
+\begin{enumerate}[nosep]
+\item Start the bootstrap; wait for its \code{/api/status} to answer; record its node
+  id from the \code{address} field.
+\item Start validators $1..N_0$ with \code{--genesis-validator} and
+  \code{--bootstrap} at the bootstrap.
+\item Wait until every validator's and the bootstrap's \code{/api/ready} answers 200
+  (the ceremony has gathered $N_0$ signatures and every node has the approved block).
+  Record the genesis block hash.
+\item Start the observer bootstrapping from the bootstrap; wait for its
+  \code{/api/ready}.
+\item Verify each genesis validator with \code{GET /api/bond-status/\{pk\}}.
+\end{enumerate}
 
 \subsection{S8: configure \Gz{}}\label{sec:gazeconf}
-With work package G3, write \code{settings.d/50-ign1t10n.conf} in the profile.
-Until G3 lands, create \code{settings.conf} from \Gz{}'s template if it is absent,
-and replace (or append) the block delimited by the two marker lines below; by
-Finding~\ref{f:settings} it governs the keys it sets.
+With work package G3, write \code{settings.d/50-ign1t10n.conf}; until G3 lands,
+maintain a managed block at the end of \code{settings.conf}, which governs the keys it
+sets because the last assignment wins (Finding~\ref{f:gazepkg}):
 \begin{lstlisting}[language=Conf]
 # >>> managed by ign1t10n: do not edit inside this block >>>
-validator = http://127.0.0.1:40403
+validator = http://127.0.0.1:40413
 observers = http://127.0.0.1:40453
 shard_id = root
 quorum = 1
 phlo_price = 1
 # <<< managed by ign1t10n <<<
 \end{lstlisting}
-If the profile already sets \code{validator} or \code{observers} to something other
-than loopback, the first-run window asks before pointing \Gz{} at the local shard
-(``Use the local shard in F1R3Gaze'', default yes). The choice is a menu toggle
-afterwards; turning it off removes the block.
+If the profile already names a non-loopback validator or observer, the first-run
+window asks before pointing \Gz{} at the local shard; the choice is a toggle in the
+configuration panel afterwards.
 
 \subsection{S9: open the browser}
-\code{open -b io.f1r3fly.f1r3gaze --args gaze://newtab}. The browser is opened only
-once both nodes are ready, so that the first page a person sees can already reach
-the shard. The first-run window closes with a summary: shard id, the funded wallet
-and its balance, and where the logs are.
+\code{open -b io.f1r3fly.f1r3gaze --args gaze://newtab}, only after the observer is
+ready. The first-run window closes with a summary: shard id, validator count, the
+funded wallet and its balance, and where the logs are.
 
-\subsection{Time budget}
-Targets on an M-series Mac, measured by the acceptance suite: S0--S6 under 10\,s of
-machine time (approval excluded); validator genesis to \code{/api/ready} under
-60\,s; observer join to \code{/api/ready} under 180\,s (the join guide cites one to
-two minutes against a healthy shard); whole first run under five minutes.
+\subsection{Budgets}\label{sec:budget}
+Targets on an M-series Mac with $N_0 = 2$, measured by the acceptance suite: S0--S6
+under 10\,s of machine time (approval excluded); S7 steps 1--3 (genesis) under
+120\,s, given the 10\,s approve interval; observer join under 180\,s; whole first run
+under five minutes.
+
+$M_{\min}(N)$ and $D_{\min}(N)$ are $(N+2)$ times the per-node resident memory and
+disk measured by Obligation~\ref{ob:footprint} at the pinned node version, plus a
+margin; they are compiled into \Hr{} from that measurement, not guessed. The
+configuration panel uses the same figures (\S\ref{sec:panel}).
 
 %======================================================================
 \section{Supervision}\label{sec:supervise}
 
 \subsection{Start}\label{sec:start}
 \begin{enumerate}[nosep]
-\item Read \code{shard.toml}; refuse to start if the installed \code{f1r3node}
-  version is incompatible with the recorded genesis version (\S\ref{sec:upgrade}).
-\item Probe the recorded ports on \code{127.0.0.1}; on conflict go to
+\item Read \code{shard.toml}; refuse to start if the installed \code{f1r3node} is
+  incompatible with the recorded storage format (\S\ref{sec:upgrade}); resume any
+  incomplete resize (\S\ref{sec:resize}) after the start.
+\item Probe every recorded port on \code{127.0.0.1}; on conflict go to
   \S\ref{sec:portfail}.
-\item Fetch the PEM password from the Keychain and spawn the validator
-  (argument vector below) with environment
-  \code{F1R3NODE\_VALIDATOR\_PASSWORD=}\ldots, \code{OPENAI\_ENABLED=false},
-  \code{OLLAMA\_ENABLED=false}, and nothing inherited beyond \code{HOME},
-  \code{PATH}, \code{TMPDIR}, \code{LANG}. Stdout and stderr go to
-  \code{validator.stdout.log}.
-\item Poll \code{GET /api/ready} each second until 200, or fail after 120\,s
-  (600\,s on the genesis start).
-\item Spawn the observer with the bootstrap address built from the recorded node
-  id and the validator's protocol and discovery ports, with the same filtered
-  environment minus the password. Poll its \code{/api/ready} likewise (300\,s on the
-  first join).
+\item Start the bootstrap; wait for \code{/api/ready} (120\,s).
+\item Start every validator whose recorded state is \code{active},
+  \code{joining}, \code{bonding} or \code{retiring}, in parallel; wait for each
+  \code{/api/ready} (120\,s).
+\item Start the observer; wait for \code{/api/ready} (120\,s).
 \item Report \code{Running}.
 \end{enumerate}
 
-\begin{lstlisting}
-f1r3node run --standalone \
-  --config-file "$STATE/conf/validator.conf" \
-  --validator-private-key-path "$STATE/keys/validator.pem" \
-  --host 127.0.0.1 --no-upnp --allow-private-addresses \
-  --native-token-name F1R3CAP --native-token-symbol F1R3 --native-token-decimals 8
+Each node runs with an environment reduced to \code{HOME}, \code{PATH},
+\code{TMPDIR}, \code{LANG}, \code{OPENAI\_ENABLED=false}, \code{OLLAMA\_ENABLED=false},
+and, for nodes with a key, \code{F1R3NODE\_VALIDATOR\_PASSWORD}. Stdout and stderr go
+to the node's \code{.stdout.log}. Argument vectors:
 
-f1r3node run \
-  --config-file "$STATE/conf/observer.conf" \
-  --bootstrap "rnode://$NODE_ID@127.0.0.1?protocol=40400&discovery=40404" \
-  --host 127.0.0.1 --no-upnp --allow-private-addresses --heartbeat-disabled \
-  --native-token-name F1R3CAP --native-token-symbol F1R3 --native-token-decimals 8
+\begin{lstlisting}
+# bootstrap
+f1r3node run --config-file "$STATE/conf/bootstrap.conf" \
+  --bootstrap "rnode://$BOOT_ID@127.0.0.1?protocol=40400&discovery=40404" \
+  --validator-private-key-path "$STATE/keys/bootstrap.pem" \
+  --required-signatures $N0 --ceremony-master-mode --heartbeat-disabled \
+  --host 127.0.0.1 --no-upnp --allow-private-addresses $TOKEN_FLAGS
+
+# validator k (--genesis-validator only for k <= N0, and only until genesis is recorded)
+f1r3node run --config-file "$STATE/conf/validator-$k.conf" \
+  --bootstrap "rnode://$BOOT_ID@127.0.0.1?protocol=40400&discovery=40404" \
+  --validator-private-key-path "$STATE/keys/validator-$k.pem" [--genesis-validator] \
+  --host 127.0.0.1 --no-upnp --allow-private-addresses $TOKEN_FLAGS
+
+# observer
+f1r3node run --config-file "$STATE/conf/observer.conf" \
+  --bootstrap "rnode://$BOOT_ID@127.0.0.1?protocol=40400&discovery=40404" \
+  --heartbeat-disabled --host 127.0.0.1 --no-upnp --allow-private-addresses $TOKEN_FLAGS
+
+TOKEN_FLAGS="--native-token-name F1R3CAP --native-token-symbol F1R3 --native-token-decimals 8"
 \end{lstlisting}
 
+\noindent
+On the very first start the bootstrap's node id is not yet known; as in
+\code{shard.yml}, it bootstraps from itself, and \Hr{} learns the id from its
+\code{/api/status} before starting any other node.
+
 \subsection{Health}
-Every 10\,s the supervisor reads \code{GET /api/status} from both nodes and keeps
-\code{isReady}, \code{lastFinalizedBlockNumber} and the peer count. The shard is
-\code{Degraded} when either node is not ready, the observer has no peer, or the
-observer's last finalised block trails the validator's by more than 20 blocks for
-more than 60\,s. The status machine is
+Every 10\,s the supervisor reads \code{GET /api/status} from every node. The shard is
+\code{Degraded} when any node is not ready, when validators' last finalised blocks
+differ by more than 20, when the observer trails validator~1 by more than 20 blocks for
+more than 60\,s, or when no block has been finalised for 120\,s while
+\code{/api/pending-deploys} at validator~1 is non-empty. The status machine is
 \code{Stopped} $\to$ \code{Starting(stage)} $\to$ \code{Running}
-$\rightleftarrows$ \code{Degraded(reason)}, with \code{Failed(reason)} reachable
-from any state and left only by an explicit start.
+$\rightleftarrows$ \code{Degraded(reason)}, plus \code{Resizing(step)} and
+\code{Failed(reason)}.
 
 \subsection{Restarts}
 A node that exits unexpectedly is restarted with exponential back-off (1, 2, 4,
-\ldots, 60\,s). A validator restart does not restart the observer; the observer
-reconnects on its own (Finding~\ref{f:lifecycle}). Five unexpected exits of one node
-within five minutes put the shard in \code{Failed}, stop the other node, and post a
-user notification pointing at the log. The supervisor never deletes a data
-directory to recover.
+\ldots, 60\,s); the others keep running. Five unexpected exits of one node within five
+minutes put the shard in \code{Failed}: the supervisor stops the whole shard, in the
+order below, rather than leave a bonded validator down (Principle~5), and posts a
+notification pointing at that node's log.
 
 \subsection{Stop}\label{sec:shutdown}
-On \code{SIGTERM} (logout, shutdown, \code{ctl stop}, agent unregistration):
-\code{SIGTERM} to the observer, wait up to 30\,s; \code{SIGTERM} to the validator,
-wait up to 60\,s; \code{SIGKILL} whatever remains; exit 0. The observer stops first so
-that it never sees the validator vanish mid-sync.
+On \code{SIGTERM}: \code{SIGTERM} to the observer and wait up to 30\,s; then to every
+validator at once and wait up to 60\,s; then to the bootstrap and wait up to 30\,s;
+\code{SIGKILL} whatever remains; exit 0. Validators stop together so that none is
+bonded and absent while the others continue.
 
 \subsection{Port conflicts at start}\label{sec:portfail}
-If a recorded port is taken at start, the shard goes to
-\code{Failed("port 40403 in use by <process>")} (the holder named via
-\code{lsof}), and the menu offers ``Choose new ports''. Reallocating is safe: API
-ports are only in \Gz{}'s managed block, which is rewritten; a new validator
-protocol port only changes the observer's bootstrap argument. No re-genesis is
-needed.
+If a recorded port is taken at start, the shard goes to \code{Failed} naming the port
+and the holder (via \code{lsof}), and offers ``Choose new ports'' for the affected
+node. Moving any node other than the bootstrap needs no other change; moving the
+bootstrap rewrites every node's \code{--bootstrap}. No re-genesis is needed.
 
 \subsection{Sleep and wake}
-Nothing special is required: the nodes are processes under a launch agent, not an
-application, so App Nap does not apply. After wake the heartbeat proposes on its next
-interval. The supervisor \SHOULD{} hold an \code{IOPMAssertion} of type
-\code{PreventUserIdleSystemSleep} only while provisioning, so a first genesis is not
-interrupted by idle sleep, and never otherwise.
+The nodes run under a launch agent, so App Nap does not apply. The supervisor holds a
+\code{PreventUserIdleSystemSleep} assertion only during provisioning and resizes.
+
+%======================================================================
+\section{Resizing the shard}\label{sec:resize}
+
+A resize changes $N$ to $M$ with $2 \le M \le 10$. It is requested from the
+configuration panel or with \code{ctl resize}. Two modes exist.
+
+\subsection{In place (default)}
+
+The running shard keeps its chain, registry, balances and \Gz{} configuration.
+Validators are added at the lowest free slots and removed from the highest occupied
+slots; validator~1 is never removed. The resize is a list of per-slot steps recorded in
+\code{shard.toml} before the first is taken; each slot moves through the states below,
+and a restart of \Hr{} resumes each slot where it stopped.
+
+\paragraph{Growing: slot $k$ from \code{absent} to \code{active}.}
+\begin{enumerate}[nosep]
+\item \code{keyed}: allocate ports; generate the key, PEM and Keychain item; render
+  \code{validator-$k$.conf}.
+\item \code{funded}: sign, with the faucet key, a transfer to validator~$k$'s vault of
+  the stake plus a fee reserve (1\,000 F1R3 + 1\,000 F1R3 by default), rendered with
+  \code{gaze-wallet}'s transfer template; send it to validator~1; wait until the
+  observer reports it finalised (\code{/api/deploy-finalization-status}) and the
+  vault's balance (\code{/api/balance}) covers it.
+\item \code{joining}: start the node (no \code{--genesis-validator}); wait for
+  \code{/api/ready}, i.e.\ the last-finalised-state join has completed.
+\item \code{bonding}: sign, with validator~$k$'s own key, the bond deploy
+  (the bundled template \code{bond.rho}, which is the repository's example with
+  the amount set to the stake); send it to validator~1, a bonded validator, never to the
+  joiner (Finding~\ref{f:resize}); wait until it is finalised and its result is
+  \code{(true, \_)}.
+\item \code{active}: poll \code{GET /api/bond-status/\{pk\}} at the observer until
+  \code{isBonded} is true, which happens at the next epoch boundary (at most
+  \code{epoch-length} $= 10$ blocks).
+\end{enumerate}
+Slots grow one after another, so that every bond is submitted while the active set is
+known; the panel shows each step.
+
+\paragraph{Shrinking: slot $k$ from \code{active} to \code{absent}.}
+\begin{enumerate}[nosep]
+\item \code{retiring}: sign, with validator~$k$'s key, the withdraw deploy
+  (\code{PoS!("withdraw", deployerId, ret)}); send it to validator~1; wait until
+  finalised with result \code{(true, \_)}.
+\item \code{left}: wait until the validator is no longer in the active set
+  (\code{PoS!("getActiveValidators")} by exploratory deploy at the observer), at the
+  next epoch boundary. Only now stop the node (Principle~5).
+\item \code{paid}: wait for the payout after \code{quarantine-length} $= 10$ further
+  blocks; sweep validator~$k$'s vault, less the fee, back to the faucet with a transfer
+  signed by validator~$k$'s key.
+\item \code{absent}: move the slot's data directory \code{nodes/validator-$k$/},
+  its configuration and its PEM into a per-slot directory under
+  \code{archive/<timestamp>/}; delete its Keychain item; free the slot.
+\end{enumerate}
+The node leaves consensus at step 2; steps 3 and 4 are bookkeeping and do not block a
+further resize.
+
+\paragraph{Failure.} If a step fails (a deploy rejected, a timeout of five epochs'
+worth of blocks without the expected state), the resize stops at that slot, the shard
+stays \code{Running} with the slots completed so far, and the panel offers ``Retry'' or
+``Undo'', where undo runs the opposite procedure on the slots already changed. A slot
+in \code{joining} whose bond never lands is stopped and archived, since it is not
+bonded.
+
+\subsection{As a new shard}
+
+``Start a new shard with $M$ validators'' is the reset of \S\ref{sec:reset} with
+$N_0 := M$: the current shard is archived and provisioning runs again from S1. It is
+faster than growing by many slots and gives $M$ genesis validators with equal stakes;
+it discards the chain. The panel says so.
+
+\subsection{Invariants}
+\begin{itemize}[nosep]
+\item $2 \le N \le 10$ at every step; a request outside the range is refused by the
+  supervisor as well as the panel.
+\item Validator~1 is always active; \Gz{}'s \code{validator} setting never changes
+  during a resize.
+\item At most one resize is in progress; start, stop and reset are refused while one
+  runs, except ``Stop'', which first finishes or undoes the current step.
+\end{itemize}
 
 %======================================================================
 \section{User interface}\label{sec:ui}
 
 \subsection{Menu bar}
-A monochrome template image of the F1R3FLY.io firefly (from the brand portal, as
-\Gz{}'s icons are) with a status dot: none for \code{Running}, amber for
-\code{Starting} and \code{Degraded}, red for \code{Failed}, hollow for
-\code{Stopped}. The menu:
+A monochrome template image of the F1R3FLY.io firefly with a status dot: none for
+\code{Running}, amber for \code{Starting}, \code{Resizing} and \code{Degraded}, red for
+\code{Failed}, hollow for \code{Stopped}.
 
 \begin{center}\small
-\begin{tabularx}{\linewidth}{@{}p{4.4cm}X@{}}
+\begin{tabularx}{\linewidth}{@{}p{4.6cm}X@{}}
 \toprule
 Item & Action\\
 \midrule
-\textit{Local shard: Running} & status line; submenu shows block height, both nodes' readiness, observer lag, disk used\\
+\textit{Local shard: Running, 2 validators} & status line; submenu: block height, per-node readiness, observer lag, disk used\\
 Open F1R3Gaze & \code{open -b io.f1r3fly.f1r3gaze}\\
 Start / Stop shard & through the control socket\\
-Fund a wallet\ldots & transfer from the validator's vault to a chosen \Gz{} wallet address (work package H4)\\
-Use the local shard in F1R3Gaze & toggles the managed settings block (\S\ref{sec:gazeconf})\\
-Copy endpoints & validator and observer URLs, shard id\\
+Configure\ldots\ (Command-comma) & opens the configuration panel (\S\ref{sec:panel})\\
+Fund a wallet\ldots & faucet transfer to a chosen \Gz{} wallet address\\
+Copy endpoints & validator~1 and observer URLs, shard id\\
 Show logs & reveals \code{\textasciitilde/Library/Logs/F1R3FLY/ign1t10n}\\
 Reset shard\ldots & \S\ref{sec:reset}\\
-Run shard at login & \code{SMAppService} register / unregister\\
 Uninstall\ldots & \S\ref{sec:uninstall}\\
 Quit ign1t10n & quits the menu bar only; the shard keeps running\\
 \bottomrule
 \end{tabularx}
 \end{center}
 
+\subsection{The configuration panel}\label{sec:panel}
+
+A standard settings window with two panes.
+
+\paragraph{Shard.}
+\begin{itemize}[nosep]
+\item \textbf{Validators}: a stepper and slider, $2 \ldots 10$, showing the current
+  $N$; changing it enables ``Apply\ldots''. Beside it, the estimated memory and disk
+  for $M+2$ nodes from the compiled footprint (\S\ref{sec:budget}), against this Mac's
+  physical memory and free disk. Above 50\,\% of physical memory the estimate turns
+  amber with a warning; above 80\,\% ``Apply'' asks for confirmation. Fault tolerance is
+  shown from the measured table of Obligation~\ref{ob:tolerance}, e.g.\ ``finality
+  continues with 1 validator stopped'', not from a formula.
+\item \textbf{Node table}: bootstrap, each validator slot and the observer, with base
+  port, short public key, state (\code{active}, \code{joining}, \code{bonding},
+  \code{retiring}, \code{down}), last finalised block, and bonded stake.
+\item \textbf{Apply\ldots}: a sheet offering ``Resize the running shard (keeps
+  everything; takes about one epoch per validator)'' as the default and ``Start a new
+  shard with $M$ validators (erases the local chain)''; the second requires typing the
+  number again. While a resize runs, the pane shows its steps per slot, with ``Retry''
+  and ``Undo'' on failure.
+\end{itemize}
+
+\paragraph{General.} ``Run shard at login'' (\code{SMAppService} register /
+unregister); ``Use the local shard in F1R3Gaze'' (the managed settings block); the
+ports of each node with ``Choose new ports''; ``Genesis amounts'' shown read-only.
+
+Everything the panel does goes through the control socket, so \code{ctl} can do the
+same and the panel never acts on the nodes directly.
+
 \subsection{First-run window}
 One window, F1R3FLY.io brand on a white surface (the white-background logo variant;
-yellow and sky only as rules and progress, never as text), listing the stages S0--S9
-with a spinner, check or error each, the elapsed time for the long ones, and a single
-primary button that changes from ``Setting up\ldots'' to ``Open F1R3Gaze''. Errors
+yellow and sky only as rules and progress), listing S0--S9 with a spinner, check or
+error each, and an ``Advanced'' disclosure with the validator count (default 2). Errors
 name the stage, the cause and the log line.
 
 %======================================================================
 \section{Integration with \Gz{}}\label{sec:gaze}
 
-\subsection{What the browser sees}
-A \Gz{} configured by S8 behaves exactly as against a remote shard with one
-observer: sites are resolved at the observer, answers carry the \emph{node} rung,
-deploys are quoted with a cost estimated at the observer, signed by the active
-wallet, sent to the validator, and followed to finalisation through the observer's
-\code{/ws/events}. Pages that demand the \emph{quorum} rung receive an error
-locally; that is correct, since one machine cannot provide distinct operators.
-
-\subsection{Required changes to \Gz{}}
+A \Gz{} configured by S8 resolves sites and reads at the observer at the \emph{node}
+rung, has deploys quoted at the observer, signs them with the active wallet, sends
+them to validator~1, and follows them to finalisation through the observer's
+\code{/ws/events}. Resizing does not touch \Gz{}'s configuration.
 
 \begin{workpackage}[G1: porcelain wallet commands]\label{wp:g1}
-\code{f1r3gaze wallet active --porcelain} prints the active wallet's address and
-exits 0, or exits 3 if there is none; \code{f1r3gaze wallet new LABEL --porcelain}
-prints only the new address. Both work while a \Gz{} window is open (the keystore
-and \code{wallets.tsv} are safe for concurrent readers; \code{new} takes the
-profile's lock file). Estimate: 0.5 engineer-week.
+\code{f1r3gaze wallet active --porcelain} prints the active address or exits 3;
+\code{f1r3gaze wallet new LABEL --porcelain} prints only the new address. Both are safe
+while a window is open. Estimate: 0.5 engineer-week.
 \end{workpackage}
 
 \begin{workpackage}[G2: balances without Embers]\label{wp:g2}
-When \code{embers\_api} is unset, the wallet panel and \code{wallet balance} read
-\code{GET /api/balance/\{address\}} from the first observer (the node's own
-read-only endpoint) instead of reporting that balances need Embers. Transfers still
-require Embers. Estimate: 0.5 engineer-week.
+When \code{embers\_api} is unset, balances come from the first observer's
+\code{GET /api/balance/\{address\}}. Estimate: 0.5 engineer-week.
 \end{workpackage}
 
 \begin{workpackage}[G3: a settings drop-in directory]\label{wp:g3}
-After \code{settings.conf}, \Gz{} parses each \code{settings.d/*.conf} in the
-profile in lexical order with the same last-assignment-wins rule. This lets \Hr{}
-own a file instead of a block inside the user's file. Estimate: 0.25 engineer-week.
+\Gz{} parses \code{settings.d/*.conf} after \code{settings.conf}, in lexical order,
+last assignment winning. Estimate: 0.25 engineer-week.
+\end{workpackage}
+
+\begin{workpackage}[G4: several validators (optional)]\label{wp:g4}
+Let \code{validator} take a list and send each deploy to the first that accepts it,
+so that \Gz{} survives validator~1 being restarted. Not required for version 1;
+Decision~\ref{dec:deploytarget}. Estimate: 0.5 engineer-week.
 \end{workpackage}
 
 \noindent
-Registering \code{f1r3://} and \code{f1r3h://} with Launch Services is left to
-\Gz{}'s own roadmap (Finding~\ref{f:lifecycle}); the installer adds nothing to
-\Gz{}'s \code{Info.plist}.
+\Hr{} depends on \code{gaze-shard} and \code{gaze-wallet} at the revision of the \Gz{}
+release it bundles; the two crates \SHOULD{} expose deploy construction, signing and
+\code{render\_transfer} as public API without the browser's broker (a small refactor
+inside G1's estimate).
 
 %======================================================================
 \section{Required changes to \Nd{}}\label{sec:node}
 
 \begin{workpackage}[N1: loopback binding]\label{wp:n1}
 Add \code{protocol-server.bind-address} and \code{peers-discovery.bind-address}
-(default \code{0.0.0.0}, preserving current behaviour) and use them where the
-transport receiver and the Kademlia server bind, replacing the literal in
-\code{grpc\_transport\_receiver.rs}. \Hr{} sets both, and \code{api-server.host},
-to \code{127.0.0.1}. Test: with the three set, \code{lsof -iTCP -sTCP:LISTEN} shows
-no non-loopback socket for the process. Estimate: 1 engineer-week.
+(default \code{0.0.0.0}) and use them where the transport receiver and the Kademlia
+server bind. \Hr{} sets both, and \code{api-server.host}, to \code{127.0.0.1}.
+Estimate: 1 engineer-week.
 \end{workpackage}
 
 \begin{workpackage}[N2: a self-contained macOS build]\label{wp:n2}
-Add a \code{vendored-openssl} feature to \code{crypto} (forwarding to
-\code{openssl/vendored}) and a CI job on \code{macos-14} building
-\code{aarch64-apple-darwin} and \code{x86\_64-apple-darwin} with it, running the
-unit tests on arm64, and failing if \code{otool -L} shows any library outside
-\code{/usr/lib} and \code{/System}. Estimate: 1 engineer-week.
+A \code{vendored-openssl} feature in \code{crypto}; a CI job on \code{macos-14}
+building both architectures, running unit tests on arm64, and failing if \code{otool -L}
+shows a library outside the system. Estimate: 1 engineer-week.
 \end{workpackage}
 
-\begin{workpackage}[N3: standalone with an observer]\label{wp:n3}
-Add \code{docker/standalone-observer.yml} (or an integration test) running a
-standalone validator and an observer bootstrapped from it, and a CI check that:
-the observer reaches Running; a deploy sent to the validator is reported finalised
-by the observer's \code{/api/deploy-finalization-status}; \code{/api/registry} and
-\code{/api/explore-deploy} answer at the observer at the new block; and the observer
-survives a restart of the validator. Fix whatever it exposes. This discharges
-Obligation~\ref{ob:topology}. Estimate: 1--2 engineer-weeks.
+\begin{workpackage}[N3: the loopback shard test]\label{wp:n3}
+An integration test (and \code{docker/}-free script) running, on one host with every
+node on \code{127.0.0.1} and distinct ports: a bootstrap, $N$ genesis validators for
+$N \in \{2, 4, 10\}$, and an observer; asserting genesis, finalisation of a deploy sent
+to validator~1 as seen at the observer, registry and exploratory reads at the
+observer; then growing by one validator (fund, join, bond, epoch boundary) and
+shrinking by one (withdraw, leave, payout), with deploys finalising throughout. Run on
+Linux in CI and on macOS in N2's job. Fix what it exposes. Discharges
+Obligations~\ref{ob:topology} and \ref{ob:resize}. Estimate: 2 engineer-weeks.
 \end{workpackage}
 
-\begin{workpackage}[N4: version and compatibility metadata]\label{wp:n4}
-\code{f1r3node --version} already exists through clap; add to it (and to
-\code{/api/status}) a \emph{storage format} integer that changes whenever a release
-cannot open a data directory written by the previous one. \Hr{}'s
-\code{compat.toml} keys on it (\S\ref{sec:upgrade}). Estimate: 0.25 engineer-week.
+\begin{workpackage}[N4: storage-format metadata]\label{wp:n4}
+A storage-format integer in \code{--version} and \code{/api/status}, changed whenever a
+release cannot open the previous release's data directory. Estimate: 0.25
+engineer-week.
 \end{workpackage}
 
 %======================================================================
@@ -835,13 +959,13 @@ cannot open a data directory written by the previous one. \Hr{}'s
 \toprule
 Threat & Protection\\
 \midrule
-Reuse of the public development key & Keys generated at S3; the release pipeline greps every artifact for the four development public keys of \code{docker/.env.example} and fails on a match.\\
-Another user on the Mac & State directory \code{0700}, PEM \code{0600}; key never in argv; PEM password only in the Keychain and in the validator's environment; control socket checks the peer uid.\\
-Hosts on the same network & Every listener on loopback (N1 and \code{api-server.host}); nothing registered for Bonjour.\\
-Local web pages in other browsers & A stock browser can reach \code{127.0.0.1:40403}. The node's HTTP API is unauthenticated, so a page elsewhere could submit a deploy it signed itself, paid by its own key, to the local shard. It cannot sign as the user's wallet or the validator. Accepted for a development shard; Decision~\ref{dec:cors} proposes refusing cross-origin requests.\\
-Pages inside \Gz{} & \Gz{}'s own model: capabilities, consent prompts quoting phlo, the system-name allow-list refusing \code{rho:rchain:deployerId}.\\
-Tampered artifact & Developer ID signatures on every Mach-O and on the archive; notarisation; hardened runtime on \code{ign1t10n} and \code{f1r3node} with no entitlements; a GPG-signed \code{SHA256SUMS} beside the archive, as \Gz{} does.\\
-Malware running as the user & Not defended. It can read the state directory; the hardened runtime at least prevents attaching a debugger to the node to read the decrypted key.\\
+Reuse of public development keys & All keys generated at S3 or at resize; the release pipeline greps every artifact for the public keys in \code{docker/.env.example} and fails on a match.\\
+Another user on the Mac & State directory \code{0700}, PEMs \code{0600}; no key in any argument vector; each PEM password only in the Keychain and in its own node's environment; faucet key never given to a node; control socket checks the peer uid.\\
+Hosts on the same network & Every listener on loopback (N1 and \code{api-server.host}).\\
+Pages in other browsers & A stock browser can reach the loopback HTTP APIs. It can submit deploys signed with its own keys and paid from its own funds; it cannot sign as any local key. Accepted for a development shard; Decision~\ref{dec:cors}.\\
+Pages inside \Gz{} & \Gz{}'s own model: capabilities, consent prompts, the system-name allow-list refusing \code{rho:rchain:deployerId}.\\
+Tampered artifact & Developer ID signatures on every Mach-O and on the archive; notarisation; hardened runtime with no entitlements; a GPG-signed \code{SHA256SUMS}.\\
+Malware running as the user & Not defended; the hardened runtime at least prevents attaching a debugger to a node to read a decrypted key.\\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -850,126 +974,116 @@ Malware running as the user & Not defended. It can read the state directory; the
 \section{Upgrade, reset and uninstall}\label{sec:lifecycle}
 
 \subsection{Upgrade}\label{sec:upgrade}
-A newer archive replaces both bundles in place. The supervisor, restarted by launchd
-because its executable changed, compares the new \code{f1r3node}'s storage format
-(N4) with the one recorded at genesis:
-\begin{itemize}[nosep]
-\item \emph{compatible}: restart both nodes on their existing data;
-\item \emph{incompatible}: do not start; the menu explains and offers
-  ``Start a new shard'', which archives the current shard under \code{archive/}
-  (\S\ref{sec:reset}) and re-provisions from S3. The wallet is kept and funded again.
-\end{itemize}
-A new node binary is never started against a data directory it cannot read.
-\Gz{} upgrades independently of the shard.
+A newer archive replaces both bundles. The supervisor, restarted by launchd, compares
+the new \code{f1r3node}'s storage format (N4) with the one recorded at genesis. If
+compatible, it restarts every node on its data, finishing any interrupted resize. If
+not, it does not start; the panel offers ``Start a new shard'' with the current $N$,
+which archives the shard and re-provisions from S3, funding the wallet again. A resize
+in progress blocks an upgrade's restart until the current step completes.
 
 \subsection{Reset}\label{sec:reset}
-``Reset shard\ldots'' stops the shard, moves \code{validator/}, \code{observer/},
-\code{genesis/}, \code{conf/} and \code{keys/} into \code{archive/<timestamp>/}
-(deleting archives beyond the newest two, after confirmation, when free space is
-short), deletes the Keychain item, and re-runs provisioning from S1. The dialog says
-that every deploy, registry entry and balance on the local shard will be gone, that
-\Gz{} wallets are untouched, and that the active wallet will be funded again.
+``Reset shard\ldots'' stops the shard, moves \code{nodes/}, \code{genesis/},
+\code{conf/} and \code{keys/} into a timestamped directory under \code{archive/}, deletes the Keychain
+items, and re-runs provisioning from S1 with the chosen $N_0$ (the current $N$ by
+default). The dialog says that every deploy, registry entry and balance on the local
+shard will be gone, and that \Gz{} wallets are untouched and the active one will be
+funded again.
 
 \subsection{Uninstall}\label{sec:uninstall}
-``Uninstall\ldots'' (also \code{Resources/uninstall.sh} and \code{ctl uninstall}):
-stop the shard; unregister the agent; remove the state directory (after a second
-confirmation, with an option to keep \code{archive/}), the logs and the Keychain
-item; remove \Gz{}'s managed block or drop-in file; move \code{ign1t10n.app} to
-the Trash; \code{pkgutil --forget io.f1r3fly.ign1t10n.pkg}. \Gz{}, its profile and its
-wallets are left alone; the dialog says so and names the \Gz{} uninstall route
-(drag to Trash) for anyone who wants it gone too.
+Stop the shard; unregister the agent; after a second confirmation remove the state
+directory (optionally keeping \code{archive/}), the logs and every Keychain item of
+service \code{io.f1r3fly.ign1t10n}; remove \Gz{}'s managed block or drop-in; move
+\code{ign1t10n.app} to the Trash; \code{pkgutil --forget io.f1r3fly.ign1t10n.pkg}.
+\Gz{}, its profile and its wallets are left alone.
 
 %======================================================================
 \section{Build and release pipeline}\label{sec:pipeline}
 
-\subsection{Where it lives}
-A new repository, \code{F1R3FLY-io/ign1t10n}, holding the \code{ign1t10n} crate,
-the templates, \code{packaging/macos/}, and \code{versions.toml}, which pins the
-\Nd{} revision and the \Gz{} release (Decision~\ref{dec:repo}). Pushing a tag
-\code{vX.Y.Z} runs the release workflow.
+A repository \code{F1R3FLY-io/ign1t10n} holds the crate, templates,
+\code{packaging/macos/} and \code{versions.toml}, which pins the \Nd{} revision and the
+\Gz{} release. A tag \code{vX.Y.Z} runs the release workflow.
 
-\subsection{Jobs}
 \begin{center}\small
 \renewcommand{\arraystretch}{1.15}
 \begin{tabularx}{\linewidth}{@{}p{2.1cm}p{2.0cm}X@{}}
 \toprule
 Job & Runner & Steps\\
 \midrule
-\code{node} & \code{macos-14} & check out \Nd{} at the pinned revision; toolchain from its \code{rust-toolchain.toml}; \code{brew install protobuf}; build \code{-p node --release --features crypto/vendored-openssl} for both targets; \code{lipo} to \code{f1r3node}; \code{otool -L} gate\\
-\code{gaze} & \code{ubuntu} & download \code{F1R3Gaze-}$v$\code{-macos-universal.dmg}, \code{SHA256SUMS} and its signature from the pinned \Gz{} release; verify the GPG signature and checksum\\
-\code{ign1t10n} & \code{macos-14} & build \code{ign1t10n} for both targets; unit tests (including the PEM round-trip against the pinned \Nd{}); \code{lipo}\\
-\code{assemble} & \code{macos-14} & mount the \Gz{} DMG and check \code{codesign --verify --deep --strict} and \code{spctl}; assemble \code{ign1t10n.app}; sign inside-out; \code{pkgbuild} both components; \code{productbuild --distribution}; sign with the installer certificate; notarise; staple; \code{pkgutil --check-signature}; \code{spctl -a -t install}\\
-\code{smoke} & \code{macos-14} & \code{sudo installer -pkg \ldots\ -target /}; run provisioning headless (\code{ign1t10n ctl provision --non-interactive}, which skips S6 approval by launching the supervisor directly); the acceptance checks A2--A6 of \S\ref{sec:accept}\\
-\code{publish} & \code{ubuntu} & \code{SHA256SUMS} over the archive, GPG signature; draft GitHub release\\
+\code{node} & \code{macos-14} & \Nd{} at the pinned revision, its pinned toolchain, \code{protobuf} from Homebrew; \code{-p node --release --features crypto/vendored-openssl} for both targets; \code{lipo}; \code{otool -L} gate\\
+\code{gaze} & \code{ubuntu} & download the pinned \Gz{} DMG, \code{SHA256SUMS} and signature; verify\\
+\code{ign1t10n} & \code{macos-14} & build for both targets; unit tests (PEM round-trip, resize state machine against a mock node); \code{lipo}\\
+\code{assemble} & \code{macos-14} & verify the \Gz{} bundle's signature; assemble \code{ign1t10n.app}; sign inside-out; \code{pkgbuild} both components; \code{productbuild}; sign with the installer certificate; notarise; staple; \code{pkgutil --check-signature}; \code{spctl -a -t install}\\
+\code{smoke} & \code{macos-14} & install; headless provisioning (\code{ctl provision --non-interactive}, which launches the supervisor directly instead of S6); acceptance checks A2--A6, A11, A12\\
+\code{publish} & \code{ubuntu} & \code{SHA256SUMS}, GPG signature; draft GitHub release\\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\subsection{Signing order}
 \begin{lstlisting}[language=bash]
 cs() { codesign --force --timestamp --options runtime \
          --entitlements packaging/macos/entitlements.plist --sign "$APP_ID" "$@"; }
 cs  ign1t10n.app/Contents/Helpers/f1r3node
 cs  ign1t10n.app/Contents/MacOS/ign1t10n
-cs  ign1t10n.app                                  # seals the bundle, incl. the agent plist
+cs  ign1t10n.app
 pkgbuild  --component ign1t10n.app --install-location /Applications \
           --scripts packaging/macos/scripts --identifier io.f1r3fly.ign1t10n.pkg ...
 pkgbuild  --component F1R3Gaze.app --install-location /Applications \
-          --identifier io.f1r3fly.f1r3gaze.pkg ...   # the release bundle, not re-signed
+          --identifier io.f1r3fly.f1r3gaze.pkg ...    # the release bundle, not re-signed
 productbuild --distribution Distribution.xml --package-path . unsigned.pkg
 productsign  --sign "$INSTALLER_ID" --timestamp unsigned.pkg ign1t10n-$V-macos-universal.pkg
 xcrun notarytool submit ... --wait && xcrun stapler staple ign1t10n-$V-macos-universal.pkg
 \end{lstlisting}
 
 \noindent
-Secrets: those of \Gz{} (Finding~\ref{f:gazepkg}), plus
-\code{MACOS\_INSTALLER\_CERT\_P12}, \code{MACOS\_INSTALLER\_CERT\_PASSWORD} and
-\code{MACOS\_INSTALLER\_SIGN\_IDENTITY} for the \emph{Developer ID Installer}
-certificate, which is distinct from the application certificate; and
-\code{GPG\_PRIVATE\_KEY}, \code{GPG\_PASSPHRASE}. As in \Gz{}, a build without
-signing secrets still produces an unsigned archive, with a warning, for internal
-testing. The entitlements file is empty: neither binary needs JIT, unsigned
-executable memory or library-validation exceptions.
+Secrets: \Gz{}'s (\code{MACOS\_CERT\_P12}, \code{MACOS\_CERT\_PASSWORD},
+\code{MACOS\_SIGN\_IDENTITY}, \code{APPLE\_ID}, \code{APPLE\_TEAM\_ID},
+\code{APPLE\_APP\_PASSWORD}), plus \code{MACOS\_INSTALLER\_CERT\_P12},
+\code{MACOS\_INSTALLER\_CERT\_PASSWORD}, \code{MACOS\_INSTALLER\_SIGN\_IDENTITY} for
+the Developer ID Installer certificate, and \code{GPG\_PRIVATE\_KEY},
+\code{GPG\_PASSPHRASE}. The entitlements file is empty.
 
 %======================================================================
 \section{Testing and acceptance}\label{sec:accept}
 
-\subsection{Acceptance criteria}
 \begin{description}[leftmargin=1.5em,style=nextline,itemsep=2pt]
-\item[A1 Clean install.] On a fresh user account of a supported Mac, opening the
-  archive and completing Installer.app (plus one background-item approval) ends with
-  \Gz{} open and \code{ctl status} reporting \code{Running}, within five minutes.
+\item[A1 Clean install.] On a fresh user account, the archive (plus one background-item
+  approval) ends with \Gz{} open and \code{ctl status} reporting \code{Running, 2
+  validators}, within five minutes.
 \item[A2 Round trip through the browser.] \code{f1r3gaze --headless} on a test page
-  that deploys a registry insertion (consent granted with \code{--allow}) is signed by
-  the funded wallet, reported finalised, and the inserted value is then read back at
-  the observer at the \emph{node} rung.
-\item[A3 Loopback only.] \code{lsof -nP -iTCP -sTCP:LISTEN} lists no socket of
-  either \code{f1r3node} on an address other than \code{127.0.0.1}.
-\item[A4 No foreign libraries.] \code{otool -L} on every Mach-O lists only
-  \code{/usr/lib} and \code{/System} paths.
-\item[A5 No shipped secrets.] The validator's public key differs from every key in
-  \code{docker/.env.example}; the PEM is \code{0600}; \code{ps -Eww} run by another
-  user does not reveal the password or key.
-\item[A6 Persistence.] After a reboot and login, the shard returns to \code{Running}
-  with the same genesis hash and a block height no lower than before.
-\item[A7 Port conflict.] With \code{docker/shard.yml} running, provisioning chooses
-  the next block for the validator and observer and \Gz{}'s settings name them; A2
-  passes.
-\item[A8 Crash recovery.] \code{kill -9} of either node leads back to
-  \code{Running} without user action; six rapid kills lead to \code{Failed} and a
-  notification.
-\item[A9 Upgrade.] Installing $v{+}1$ over $v$ with a compatible storage format
-  keeps the chain; with an incompatible one, the old shard is archived only after the
-  user agrees, and the wallet is funded at the new genesis.
-\item[A10 Uninstall.] After uninstall, no file under the state directory or the log
-  directory, no Keychain item of service \code{io.f1r3fly.ign1t10n}, and no registered
-  agent remain; \Gz{} and its wallets are untouched.
+  that inserts into the registry is signed by the funded wallet, sent to validator~1,
+  reported finalised, and read back at the observer.
+\item[A3 Loopback only.] \code{lsof -nP -iTCP -sTCP:LISTEN} lists no \code{f1r3node}
+  socket on an address other than \code{127.0.0.1}.
+\item[A4 No foreign libraries.] \code{otool -L} on every Mach-O lists only system paths.
+\item[A5 No shipped secrets.] No public key in \code{shard.toml} appears in
+  \code{docker/.env.example}; PEMs are \code{0600}; \code{ps -Eww} by another user
+  reveals no key or password.
+\item[A6 Persistence.] After a reboot, the shard returns to \code{Running} with the
+  same genesis hash, the same $N$, and a height no lower than before.
+\item[A7 Port conflict.] With \code{docker/shard.yml} running (which occupies the
+  default plan), provisioning allocates other bases and A2 passes.
+\item[A8 Crash recovery.] \code{kill -9} of any one node leads back to \code{Running};
+  six rapid kills of one validator stop the whole shard in \code{Failed}.
+\item[A9 Upgrade.] $v$ to $v{+}1$ keeps the chain and $N$ with a compatible storage
+  format; with an incompatible one the shard is archived only after consent.
+\item[A10 Uninstall.] No state, logs, Keychain items or agent remain; \Gz{} and its
+  wallets are untouched.
+\item[A11 Grow in place.] From $N=2$, \code{ctl resize 5}: validators 3--5 reach
+  \code{active}, \code{/api/bond-status} is true for each, and a deploy sent during the
+  resize and one after it both finalise. The chain's height never decreases.
+\item[A12 Shrink in place.] From $N=5$, \code{ctl resize 3}: validators 5 and 4
+  withdraw, leave the active set before their processes stop, are paid out, and are
+  swept to the faucet; deploys finalise throughout; validator~1 is untouched.
+\item[A13 New shard at the maximum.] ``Start a new shard with 10 validators'' produces
+  a genesis with ten bonds and A2 passes.
+\item[A14 Bounds and interruption.] \code{ctl resize 1} and \code{ctl resize 11} are
+  refused; killing the supervisor during each growing and shrinking step and restarting
+  it completes the resize.
 \end{description}
 
-\subsection{Matrix}
-macOS 13, 14, 15, 26 and the current release, on Apple silicon; macOS 13 and 15 on
-Intel while x86\_64 is shipped. A1, A6 and A10 run on physical or virtualised
-machines before each release; the others run in CI on every tag.
+The matrix is macOS 13, 14, 15, 26 and the current release on Apple silicon, and 13
+and 15 on Intel while x86\_64 is shipped; A11--A13 also run on the smallest supported
+memory configuration to calibrate the panel's warnings.
 
 %======================================================================
 \section{Work packages and schedule}\label{sec:plan}
@@ -981,240 +1095,251 @@ machines before each release; the others run in CI on every tag.
 WP & Deliverable & Est.\\
 \midrule
 N1 & node: configurable bind address for transport and discovery & 1\\
-N2 & node: vendored OpenSSL feature; macOS CI build with \code{otool} gate & 1\\
-N3 & node: standalone-plus-observer topology test, and fixes & 1.5\\
-N4 & node: storage-format number in \code{--version} and \code{/api/status} & 0.25\\
-G1--G3 & \Gz{}: porcelain wallet commands; balances from the node; \code{settings.d} & 1.25\\
-H1 & \code{ign1t10n}: manifest, provisioning stages, configuration rendering, key generation and PEM, Keychain & 2\\
-H2 & \code{ign1t10n supervise}: process management, health, restarts, shutdown, control socket, \code{ctl} & 2\\
-H3 & menu bar, first-run window, \code{SMAppService}, notifications, brand assets & 2\\
-H4 & reset, upgrade compatibility, uninstall, ``Fund a wallet'' & 1\\
-R1 & release workflow: packaging, signing, notarisation, smoke job & 1.5\\
-T1 & acceptance suite and the pre-release matrix & 1.5\\
+N2 & node: vendored OpenSSL; macOS CI build with \code{otool} gate & 1\\
+N3 & node: loopback shard test, $N \in \{2,4,10\}$, grow and shrink; fixes & 2\\
+N4 & node: storage-format number & 0.25\\
+G1--G3 & \Gz{}: porcelain wallet commands; balances from the node; \code{settings.d}; public deploy and transfer API & 1.25\\
+H1 & \code{ign1t10n}: manifest, provisioning, configuration rendering, keys and PEMs, Keychain & 2\\
+H2 & \code{ign1t10n supervise}: multi-node process management, genesis ceremony, health, restarts, shutdown, control socket, \code{ctl} & 2.5\\
+H3 & menu bar, first-run window, \code{SMAppService}, notifications, brand assets & 1.5\\
+H4 & resize engine: per-slot state machine, faucet transfers, bond and withdraw deploys, sweep, undo & 2.5\\
+H5 & configuration panel: shard and general panes, footprint estimates, node table, apply sheet & 1.5\\
+H6 & reset, upgrade compatibility, uninstall, ``Fund a wallet'' & 1\\
+R1 & release workflow & 1.5\\
+T1 & acceptance suite, footprint and tolerance measurements, pre-release matrix & 2\\
 \midrule
- & Total & 15\\
+ & Total & 20\\
 \bottomrule
 \end{tabularx}
 \end{center}
 
 \noindent
-N3 is on the critical path: if the standalone topology needs node changes, the
-fallback in Obligation~\ref{ob:topology} costs about one more week. With two
-engineers (one on the node and pipeline, one on \Hr{}) the work fits in eight
-calendar weeks. Nothing here waits on \Gz{} phase P4 beyond the release artifact
-that \Gz{} already produces.
+N3 is on the critical path: it proves the topology and the resize procedure before
+H2 and H4 depend on them. With two engineers, one on the node, the resize engine and
+the pipeline and one on the rest of \Hr{}, the work fits in ten to eleven calendar
+weeks.
 
 %======================================================================
 \section{Obligations and decisions}\label{sec:open}
 
-\begin{obligation}[The topology works]\label{ob:topology}
-Before H2 is merged, N3 must show an observer joining and following a standalone
-validator. If standalone mode cannot serve the join, the fallback is to run the
-validator without \code{--standalone} but with the standalone configuration's
-ceremony block (it then waits for its first peer, which the observer provides), and to
-make the heartbeat's new-parents check conditional on the size of the active
-validator set rather than on the standalone flag.
+\begin{obligation}[The loopback shard works]\label{ob:topology}
+Before H2 is merged, N3 must show the \code{shard.yml} topology running with every node
+on \code{127.0.0.1} and distinct ports, for $N = 2$ and $N = 10$.
+\end{obligation}
+
+\begin{obligation}[Resizing works]\label{ob:resize}
+Before H4 is merged, N3 must show one validator joining, bonding and becoming active,
+and one withdrawing, leaving and being paid out, with the shard configuration's epoch
+and quarantine lengths, and with deploys finalising throughout.
+\end{obligation}
+
+\begin{obligation}[Footprint]\label{ob:footprint}
+T1 measures, at the pinned node version, each role's resident memory and disk after one
+hour of a light deploy load, for $N = 2$ and $N = 10$; the figures are compiled into
+\Hr{} as $M_{\min}$, $D_{\min}$ and the panel's estimates, and re-measured whenever the
+pinned node changes.
+\end{obligation}
+
+\begin{obligation}[Measured fault tolerance]\label{ob:tolerance}
+For each $N$ from 2 to 10, T1 measures how many validators may be stopped while blocks
+continue to finalise, under \code{fault-tolerance-threshold = 0.1}, and the panel shows
+that table. With $N = 2$ the expectation is none; the panel says so plainly.
 \end{obligation}
 
 \begin{obligation}[PEM compatibility]\label{ob:pem}
-The PBES2 parameters of S3 must be accepted by the OpenSSL that N2 vendors. The
-round-trip test in H1 is the proof and runs in CI against the pinned \Nd{}.
+The PBES2 parameters of \S\ref{sec:ign} must be accepted by the OpenSSL that N2
+vendors; the round-trip test in H1 proves it in CI.
 \end{obligation}
 
-\begin{obligation}[Finalisation latency]\label{ob:latency}
-The shipped standalone configuration proposes from the heartbeat with a 5\,s check
-interval. A2 records the time from deploy to finalisation seen at the observer; if
-the median exceeds 10\,s the validator template's heartbeat interval is revisited
-(Decision~\ref{dec:heartbeat}).
-\end{obligation}
+\begin{decision}[Fold the bootstrap into validator~1]\label{dec:bootstrap}
+The bootstrap costs one node's memory and adds a process that proposes nothing. A
+bonded ceremony master exists already (standalone mode is one), so validator~1 could
+take the role, leaving exactly $N$ validators plus the observer. Proposed: keep the
+tested \code{shard.yml} shape for version 1 and revisit once N3 is green.
+\end{decision}
 
 \begin{decision}[Intel]\label{dec:arch}
-Ship universal binaries, as \Gz{} does, or Apple silicon only, which halves the node
-build time and removes an untested platform from the matrix.
+Universal binaries, as \Gz{} ships, or Apple silicon only, which also matters more now
+that ten validators is a supported configuration.
 \end{decision}
 
 \begin{decision}[Minimum macOS]\label{dec:macos}
-13.0, for \code{SMAppService}. Supporting 11 and 12 would require writing a plist
-into \code{\textasciitilde/Library/LaunchAgents} and using \code{launchctl bootstrap},
-a second code path for two releases that are out of security support.
+13.0, for \code{SMAppService}.
 \end{decision}
 
-\begin{decision}[Implementation language of the UI layer]\label{dec:lang}
-Rust throughout (proposed), or a Swift/SwiftUI menu bar calling the Rust
-supervisor, which is less code for the window and \code{SMAppService} but adds a
-second toolchain.
+\begin{decision}[Genesis amounts and stakes]\label{dec:amounts}
+One million F1R3 to the browser's wallet, 1\,000 F1R3 of fees and a stake of 1\,000 to
+each validator, the rest to the faucet; or stakes chosen per validator in the panel.
 \end{decision}
 
-\begin{decision}[Genesis amounts]\label{dec:amounts}
-One million F1R3 to the browser's wallet and the rest of the standalone supply to the
-validator's vault as a faucet; or fund every wallet \Gz{} lists at provisioning.
+\begin{decision}[Where deploys go]\label{dec:deploytarget}
+Always validator~1 (proposed), or \Gz{} rotating across validators with G4.
 \end{decision}
 
-\begin{decision}[Heartbeat interval]\label{dec:heartbeat}
-Keep the repository's standalone values (5\,s check, 10\,s maximum age of the last
-finalised block) or shorten them for a more responsive local shard.
+\begin{decision}[Heartbeat and loop timing]\label{dec:heartbeat}
+Keep \code{default.conf}'s timings (casper loop 750\,ms, heartbeat on) or tune them for
+a laptop once T1 has measured finalisation latency and idle CPU at $N = 10$.
 \end{decision}
 
 \begin{decision}[Cross-origin requests]\label{dec:cors}
-Whether \Hr{}'s node configuration should (after a small node change) refuse HTTP
-requests carrying an \code{Origin} header other than none, so that pages in other
-browsers cannot use the local shard's API.
-\end{decision}
-
-\begin{decision}[Repository]\label{dec:repo}
-A new \code{ign1t10n} repository (proposed), or \code{packaging/macos-local/} in the
-\Gz{} repository, which would couple the shard manager's releases to the browser's.
+Whether the node should refuse HTTP requests carrying a foreign \code{Origin} header,
+so that pages in other browsers cannot use the local shard's API.
 \end{decision}
 
 \begin{decision}[Embers]
-Whether a later version bundles an Embers instance so that transfers, not just
-balances, work against the local shard.
+Whether a later version bundles Embers, so that transfers, not just balances, work in
+\Gz{} against the local shard.
 \end{decision}
 
 %======================================================================
 \appendix
 \section{Configuration templates}\label{app:conf}
 
-\subsection*{\code{conf/validator.conf}}
+\subsection*{\code{conf/common.conf}}
 \begin{lstlisting}[language=Hocon]
-# Rendered by ign1t10n. The node loads its built-in defaults.conf first.
-standalone = true
-dev-mode   = true
-
+# Rendered by ign1t10n. The node loads its built-in defaults.conf first;
+# the values below are docker/conf/default.conf's, generalised to loopback.
 protocol-server {
   network-id = "ign1t10n-{{NETWORK_SUFFIX}}"
-  port = {{V_BASE}}                      # 40400
-  bind-address = "127.0.0.1"             # N1
+  bind-address = "127.0.0.1"            # N1; omitted until N1 lands
   allow-private-addresses = true
   no-upnp = true
 }
-peers-discovery { port = {{V_BASE+4}}, bind-address = "127.0.0.1" }
-api-server {
-  host = "127.0.0.1"
-  port-grpc-external = {{V_BASE+1}}
-  port-grpc-internal = {{V_BASE+2}}
-  port-http          = {{V_BASE+3}}
-  port-admin-http    = {{V_BASE+5}}
-}
-storage { data-dir = "{{STATE}}/validator" }
-tls {
-  certificate-path = "{{STATE}}/validator/node.certificate.pem"
-  key-path         = "{{STATE}}/validator/node.key.pem"
-}
+peers-discovery.bind-address = "127.0.0.1"
+api-server.host = "127.0.0.1"
 casper {
   shard-name = "root"
-  fault-tolerance-threshold = 0.0
-  synchrony-constraint-threshold = 0.0
-  casper-loop-interval = 5 seconds
-  requested-blocks-timeout = 60 seconds
-  fork-choice-stale-threshold = 30 seconds
-  fork-choice-check-if-stale-interval = 1 minutes
+  fault-tolerance-threshold = 0.1
+  casper-loop-interval = 750 ms
+  requested-blocks-timeout = 5 seconds
+  fork-choice-stale-threshold = 1 minutes
+  fork-choice-check-if-stale-interval = 20 seconds
   max-number-of-parents = 100
   enable-mergeable-channel-gc = true
-  heartbeat { enabled = true, check-interval = 5 seconds, max-lfb-age = 10 seconds }
-  genesis-block-data {
-    genesis-data-dir = "{{STATE}}/genesis"
-    bonds-file   = "{{STATE}}/genesis/bonds.txt"
-    wallets-file = "{{STATE}}/genesis/wallets.txt"
-    number-of-active-validators = 1
-    pos-multi-sig-quorum = 1
-  }
+  heartbeat { enabled = true }
   genesis-ceremony {
-    required-signatures = 0
-    approve-interval = 1 seconds
-    approve-duration = 1 seconds
-    autogen-shard-size = 1
-    ceremony-master-mode = true
+    required-signatures = {{N0}}
+    approve-interval = 10 seconds
+    approve-duration = 1 minutes
   }
-}
-logging {
-  format = "json"
-  sink   = "file"
-  file { rotation = "daily", retention = 7 }
-}
-metrics { prometheus = true }
-\end{lstlisting}
-
-\subsection*{\code{conf/observer.conf}}
-\begin{lstlisting}[language=Hocon]
-protocol-server {
-  network-id = "ign1t10n-{{NETWORK_SUFFIX}}"          # identical to the validator's
-  port = {{O_BASE}}                                   # 40450
-  bind-address = "127.0.0.1"
-  allow-private-addresses = true
-  no-upnp = true
-}
-peers-discovery { port = {{O_BASE+4}}, bind-address = "127.0.0.1" }
-api-server {
-  host = "127.0.0.1"
-  port-grpc-external = {{O_BASE+1}}
-  port-grpc-internal = {{O_BASE+2}}
-  port-http          = {{O_BASE+3}}
-  port-admin-http    = {{O_BASE+5}}
-}
-storage { data-dir = "{{STATE}}/observer" }
-tls {
-  certificate-path = "{{STATE}}/observer/node.certificate.pem"
-  key-path         = "{{STATE}}/observer/node.key.pem"
-}
-casper {
-  shard-name = "root"
-  fault-tolerance-threshold = 0.0
-  synchrony-constraint-threshold = 0.0
-  max-number-of-parents = 100
-  enable-mergeable-channel-gc = true
-  heartbeat { enabled = false }
   genesis-block-data {
     genesis-data-dir = "{{STATE}}/genesis"
     bonds-file   = "{{STATE}}/genesis/bonds.txt"
     wallets-file = "{{STATE}}/genesis/wallets.txt"
+    number-of-active-validators = 10
+    epoch-length = 10
+    quarantine-length = 10
   }
 }
 logging { format = "json", sink = "file", file { rotation = "daily", retention = 7 } }
 metrics { prometheus = true }
 \end{lstlisting}
 
+\subsection*{\code{conf/bootstrap.conf}}
+\begin{lstlisting}[language=Hocon]
+include "common.conf"
+casper.genesis-ceremony.ceremony-master-mode = true
+protocol-server.port = 40400
+peers-discovery.port = 40404
+api-server { port-grpc-external = 40401, port-grpc-internal = 40402,
+             port-http = 40403, port-admin-http = 40405 }
+storage.data-dir = "{{STATE}}/nodes/bootstrap"
+tls { certificate-path = "{{STATE}}/nodes/bootstrap/node.certificate.pem",
+      key-path = "{{STATE}}/nodes/bootstrap/node.key.pem" }
+\end{lstlisting}
+
+\subsection*{\code{conf/validator-\{k\}.conf}}
+\begin{lstlisting}[language=Hocon]
+include "common.conf"
+protocol-server.port = {{BASE}}         # 40410 for k = 1, 40420 for k = 2, ...
+peers-discovery.port = {{BASE+4}}
+api-server { port-grpc-external = {{BASE+1}}, port-grpc-internal = {{BASE+2}},
+             port-http = {{BASE+3}}, port-admin-http = {{BASE+5}} }
+storage.data-dir = "{{STATE}}/nodes/validator-{{k}}"
+tls { certificate-path = "{{STATE}}/nodes/validator-{{k}}/node.certificate.pem",
+      key-path = "{{STATE}}/nodes/validator-{{k}}/node.key.pem" }
+\end{lstlisting}
+
+\subsection*{\code{conf/observer.conf}}
+\begin{lstlisting}[language=Hocon]
+include "common.conf"
+casper.heartbeat.enabled = false
+protocol-server.port = 40450
+peers-discovery.port = 40454
+api-server { port-grpc-external = 40451, port-grpc-internal = 40452,
+             port-http = 40453, port-admin-http = 40455 }
+storage.data-dir = "{{STATE}}/nodes/observer"
+tls { certificate-path = "{{STATE}}/nodes/observer/node.certificate.pem",
+      key-path = "{{STATE}}/nodes/observer/node.key.pem" }
+\end{lstlisting}
+
 \noindent
-\code{\{\{STATE\}\}} contains a space (\code{Application Support}); HOCON accepts it
-inside quotes, and every path above is quoted. The \code{bind-address} keys are
-introduced by N1; until N1 lands the renderer omits them.
+\code{\{\{STATE\}\}} contains a space; every path is quoted. \code{include} is
+resolved relative to the including file, as in
+\code{docker/conf/readonly-remote.conf}.
 
 \section{The manifest}\label{app:manifest}
 
 \begin{lstlisting}[language=Conf]
 # ~/Library/Application Support/F1R3FLY/ign1t10n/shard.toml
-schema = 1
+schema = 2
 
 [shard]
 id = "root"
 network_id = "ign1t10n-3f9c1a07"
-genesis_hash = "a41c...e2"           # block 0, recorded at S7
+genesis_hash = "a41c...e2"
+genesis_validators = 2               # N0
 genesis_node_version = "0.4.46"
 storage_format = 7                   # from N4
 created = 2026-10-14T09:12:44Z
 
-[validator]
-public_key = "04a1...9e"
-address = "1111...Qk"
-node_id = "5b0e...c1"                # from /api/status .address at S7
-ports = { base = 40400 }
+[bootstrap]
+public_key = "04e2...0b"
+node_id = "5b0e...c1"
+base_port = 40400
 
 [observer]
-ports = { base = 40450 }
+base_port = 40450
+
+[faucet]
+address = "1111...Fq"
 
 [wallet]
-funded = "1111...Zr"                 # the Gaze wallet funded at genesis
-gaze_integration = true              # the managed settings block is present
+funded = "1111...Zr"
+gaze_integration = true
+
+[[validators]]
+slot = 1
+public_key = "04a1...9e"
+address = "1111...Qk"
+base_port = 40410
+state = "active"                     # absent|keyed|funded|joining|bonding|active|retiring|left|paid
+genesis = true
+
+[[validators]]
+slot = 2
+public_key = "04c7...31"
+address = "1111...Hm"
+base_port = 40420
+state = "active"
+genesis = true
+
+[resize]                             # present only while a resize runs
+target = 4
+mode = "in-place"
+started = 2026-10-20T16:02:10Z
+steps = [ { slot = 3, state = "bonding", deploy = "3045...aa" },
+          { slot = 4, state = "absent" } ]
 
 [stages]                             # provisioning progress, S0..S9
 preflight = true
 ports = true
 wallet = true
-key = true
-genesis = true
+keys = true
+genesis_files = true
 configs = true
 agent = true
-first_start = true
+genesis = true
 gaze = true
 opened = true
 \end{lstlisting}

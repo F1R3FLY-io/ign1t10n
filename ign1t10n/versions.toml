@@ -1,0 +1,30 @@
+# Everything a release of ign1t10n bundles, pinned. The release workflow reads
+# this file; nothing is fetched at a floating revision.
+
+[f1r3node]
+repository = "https://github.com/F1R3FLY-io/f1r3node-rust"
+revision   = "fce422a7dc8fade69c42e16e815bebb822d53f30"   # crate `node` v0.4.46
+toolchain  = "nightly-2026-02-09"                          # from its rust-toolchain.toml
+features   = ["crypto/vendored-openssl"]                   # work package N2
+# Node work packages this revision contains. The configuration renderer
+# always writes the keys (the node ignores keys it does not know), and the
+# supervisor's loopback audit and the smoke job check that they took effect.
+#   N1 bind-address, N4 storage-format, N5 origin-guard
+has = []
+
+[f1r3gaze]
+repository = "https://github.com/F1R3FLY-io/F1R3Gaze"
+revision   = "f6ee26a612f3740a46cce613ddc9999f10bc2dab"
+release    = "v0.1.0"      # the notarised DMG the `gaze` job downloads
+# F1R3Gaze work packages this release contains: G1 porcelain wallet commands,
+# G3 settings.d drop-in, G4 validator list with random choice per deploy.
+has = []
+
+[embers]
+repository = "https://github.com/F1R3FLY-io/embers"
+revision   = "28e50d4bf287d76e3ea72b0704895d1f96a8c07f"
+package    = "embers"
+
+[platform]
+architectures = ["arm64"]   # Decision 2: Apple silicon only
+minimum_macos = "13.0"      # Decision 3: SMAppService

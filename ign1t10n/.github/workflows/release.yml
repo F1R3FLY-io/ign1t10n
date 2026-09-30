@@ -1,0 +1,128 @@
+name: release
+# Builds everything pinned in versions.toml, assembles and notarises
+# ign1t10n-<v>-macos-arm64.pkg, smoke-tests it against a real shard (N3) and
+# publishes it (spec §11).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  node:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import tomllib; v = tomllib.load(open("versions.toml","rb"))["f1r3node"]
+          print(f"rev={v['revision']}"); print(f"toolchain={v['toolchain']}")
+          PY
+      - uses: actions/checkout@v4
+        with: { repository: F1R3FLY-io/f1r3node-rust, ref: "${{ steps.v.outputs.rev }}", path: node }
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ steps.v.outputs.toolchain }}", targets: aarch64-apple-darwin }
+      - run: brew install protobuf
+      # N2: vendored OpenSSL so the binary links only system libraries.
+      - run: cargo build --release --locked -p node --features crypto/vendored-openssl --target aarch64-apple-darwin
+        working-directory: node
+      - uses: actions/upload-artifact@v4
+        with: { name: f1r3node, path: node/target/aarch64-apple-darwin/release/node }
+
+  embers:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: python3 -c "import tomllib;print('rev='+tomllib.load(open('versions.toml','rb'))['embers']['revision'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with: { repository: F1R3FLY-io/embers, ref: "${{ steps.v.outputs.rev }}", path: embers }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+      - run: brew install protobuf
+      - run: cargo build --release --locked -p embers --target aarch64-apple-darwin
+        working-directory: embers
+      - uses: actions/upload-artifact@v4
+        with: { name: embers, path: embers/target/aarch64-apple-darwin/release/embers }
+
+  gaze:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: python3 -c "import tomllib;print('tag='+tomllib.load(open('versions.toml','rb'))['f1r3gaze']['release'])" >> "$GITHUB_OUTPUT"
+      - run: gh release download "${{ steps.v.outputs.tag }}" -R F1R3FLY-io/F1R3Gaze -p '*.pkg' -D gaze
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - uses: actions/upload-artifact@v4
+        with: { name: gaze, path: gaze/*.pkg }
+
+  assemble:
+    needs: [node, embers, gaze]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91
+        with: { targets: aarch64-apple-darwin }
+      - uses: actions/download-artifact@v4
+        with: { path: in }
+      - name: Import signing identities
+        env:
+          CERTS_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          CERTS_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          if [ -n "$CERTS_P12" ]; then
+            echo "$CERTS_P12" | base64 --decode > certs.p12
+            security create-keychain -p ci build.keychain
+            security import certs.p12 -k build.keychain -P "$CERTS_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+            security list-keychains -s build.keychain; security unlock-keychain -p ci build.keychain
+            security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          fi
+      - name: Notary profile
+        if: ${{ secrets.NOTARY_APPLE_ID != '' }}
+        run: xcrun notarytool store-credentials ign1t10n --apple-id "${{ secrets.NOTARY_APPLE_ID }}" --team-id "${{ secrets.TEAM_ID }}" --password "${{ secrets.NOTARY_PASSWORD }}"
+      - run: chmod +x in/f1r3node/node in/embers/embers
+      - run: packaging/macos/build.sh "${GITHUB_REF_NAME#v}" in/f1r3node/node in/embers/embers "$(ls in/gaze/*.pkg | head -1)"
+        env:
+          SIGN_APP: ${{ secrets.SIGN_APP }}
+          SIGN_PKG: ${{ secrets.SIGN_PKG }}
+          NOTARY_PROFILE: ${{ secrets.NOTARY_APPLE_ID != '' && 'ign1t10n' || '' }}
+      - uses: actions/upload-artifact@v4
+        with: { name: pkg, path: "dist/*.pkg*" }
+
+  smoke:
+    # N3: install the package and bring up a real shard headless (A1, A3, A5,
+    # A6, A11, A12 at N = 2 -> 3 -> 2). Uses file secrets: CI has no login keychain session.
+    needs: assemble
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: pkg, path: pkg }
+      - run: sudo installer -pkg pkg/*.pkg -target /
+      - name: Provision headless
+        env: { IGN1T10N_DEV_SECRETS: "1" }
+        run: |
+          B=/Applications/ign1t10n.app/Contents/MacOS/ign1t10n
+          $B ctl provision --non-interactive --validators 2
+          $B ctl status
+          $B ctl resize 3; until $B ctl status --json | grep -q '"validators": 3' && ! $B ctl status --json | grep -q '"resize"'; do sleep 10; done
+          $B ctl resize 2; until $B ctl status --json | grep -q '"validators": 2' && ! $B ctl status --json | grep -q '"resize"'; do sleep 10; done
+          lsof -nP -iTCP -sTCP:LISTEN | grep -E 'f1r3node|embers' || true
+          $B ctl status --json | tee status.json
+          ! grep -q '"exposed"' status.json || echo "::warning::sockets listen off loopback (N1 not in this node)"
+      - if: always()
+        run: tar czf logs.tgz -C ~/Library/Logs/F1R3FLY ign1t10n || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: smoke-logs, path: logs.tgz }
+
+  publish:
+    needs: smoke
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: pkg, path: pkg }
+      - run: gh release create "$GITHUB_REF_NAME" pkg/* -R "$GITHUB_REPOSITORY" --notes "ign1t10n $GITHUB_REF_NAME (Apple silicon, macOS 13+)"
+        env: { GH_TOKEN: "${{ github.token }}" }

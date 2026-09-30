@@ -1,0 +1,63 @@
+[package]
+name = "ign1t10n"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "Apache-2.0"
+authors = ["F1R3FLY.io"]
+description = "macOS installer and shard manager: a local F1R3Node-Rust shard (bootstrap, 2-10 validators, observer, optional Embers) for the F1R3Gaze browser"
+repository = "https://github.com/F1R3FLY-io/ign1t10n"
+publish = false
+
+[[bin]]
+name = "ign1t10n"
+path = "src/main.rs"
+
+[[example]]
+name = "fake_node"
+path = "examples/fake_node.rs"
+
+[dependencies]
+# F1R3Gaze at the release ign1t10n bundles (versions.toml): deploy
+# construction and signing byte-for-byte as the node verifies it, the node
+# HTTP client, and F1R3Cap addresses (spec, Finding "Deploys can be signed
+# outside the node").
+gaze-shard = { git = "https://github.com/F1R3FLY-io/F1R3Gaze", rev = "f6ee26a612f3740a46cce613ddc9999f10bc2dab" }
+gaze-wallet = { git = "https://github.com/F1R3FLY-io/F1R3Gaze", rev = "f6ee26a612f3740a46cce613ddc9999f10bc2dab" }
+gaze-net = { git = "https://github.com/F1R3FLY-io/F1R3Gaze", rev = "f6ee26a612f3740a46cce613ddc9999f10bc2dab" }
+
+k256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+pkcs8 = { version = "0.10", features = ["encryption", "pem", "std"] }
+pkcs5 = { version = "0.7", features = ["pbes2"] }
+getrandom = "0.2"
+rand = "0.8"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2.11"
+core-foundation = "0.9"
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = [
+  "NSString", "NSThread", "NSTimer", "NSDate", "NSRunLoop", "NSObject", "NSArray",
+  "NSGeometry", "NSValue", "NSURL", "NSDictionary",
+] }
+objc2-app-kit = { version = "0.2.2", features = [
+  "NSApplication", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusItem",
+  "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSMenu", "NSMenuItem",
+  "NSWindow", "NSTextField", "NSStepper", "NSAlert", "NSWorkspace", "NSText",
+  "NSButtonCell", "NSCell", "NSActionCell", "NSGraphics", "NSColor", "NSFont",
+  "NSImage", "NSTextView", "NSScrollView", "NSClipView", "NSPasteboard", "NSBox",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
