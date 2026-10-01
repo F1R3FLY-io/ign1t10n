@@ -69,6 +69,30 @@ pub fn node_args(p: &Paths, m: &Manifest, role: &Role) -> Result<Vec<String>, St
         }
         Role::Embers => return Err("embers is not a node".into()),
     }
+    // Ports on the command line: the node's port options have default values
+    // (40400, 40403, ...), and a default counts as given, so it overrides the
+    // port in the configuration file. Every node would start on the defaults.
+    let base = match role {
+        Role::Bootstrap => m.bootstrap.base_port,
+        Role::Observer => m.observer.base_port,
+        Role::Validator(k) => m.validator(*k).ok_or_else(|| format!("no validator {k}"))?.base_port,
+        Role::Embers => unreachable!(),
+    };
+    let b = crate::ports::Block(base);
+    for (flag, port) in [
+        ("--protocol-port", b.protocol()),
+        ("--discovery-port", b.discovery()),
+        ("--api-port-grpc-external", b.grpc_external()),
+        ("--api-port-grpc-internal", b.grpc_internal()),
+        ("--api-port-http", b.http()),
+        ("--api-port-admin-http", b.admin()),
+    ] {
+        a.extend([flag.to_string(), port.to_string()]);
+    }
+    // Both the network id this node accepts and the one it sends (the CLI
+    // option sets both; the configuration alone leaves the outgoing one at
+    // its default, "testnet", and every peer refuses the messages).
+    a.extend(["--network-id".to_string(), m.shard.network_id.clone()]);
     a.extend(common.iter().map(|s| s.to_string()));
     a.extend(TOKEN_FLAGS.iter().map(|s| s.to_string()));
     Ok(a)
@@ -168,6 +192,10 @@ mod tests {
         let b = node_args(&p, &m, &Role::Bootstrap).unwrap();
         assert!(!b.contains(&"--bootstrap".to_string()));
         assert!(b.windows(2).any(|w| w[0] == "--required-signatures" && w[1] == "1"), "N0 - 1 approvals");
+        let v2 = node_args(&p, &m, &Role::Validator(2)).unwrap();
+        assert!(v2.windows(2).any(|w| w[0] == "--protocol-port" && w[1] == "40420"), "ports on the command line");
+        assert!(v2.windows(2).any(|w| w[0] == "--api-port-http" && w[1] == "40423"));
+        assert!(v2.windows(2).any(|w| w[0] == "--network-id" && w[1] == m.shard.network_id));
         let o = node_args(&p, &m, &Role::Observer).unwrap();
         assert!(!o.iter().any(|a| a.contains("private-key")));
         assert_eq!(Role::parse("validator-7"), Some(Role::Validator(7)));

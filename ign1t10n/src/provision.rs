@@ -274,6 +274,19 @@ pub fn configure_embers(_p: &Paths, s: &dyn Secrets, m: &mut Manifest) -> Result
     Ok(m.clone())
 }
 
+/// The supervisor answers on its socket, starting it if it does not (an
+/// installer step stopped it, or it exited cleanly and launchd left it down).
+pub fn ensure_supervisor(p: &Paths, headless: bool) -> Result<(), String> {
+    if control::call(p, &Request::Status, Duration::from_secs(5)).is_ok() {
+        return Ok(());
+    }
+    info!("the supervisor is not running; starting it");
+    if headless { crate::platform::launch_supervisor_directly(p) } else { crate::platform::start_agent() }?;
+    crate::admin::wait_for("the shard supervisor to start", Duration::from_secs(60), Duration::from_millis(500), || {
+        control::call(p, &Request::Status, Duration::from_secs(5)).ok().map(|_| ())
+    })
+}
+
 /// Wait for the supervisor to finish the genesis start.
 fn await_genesis(p: &Paths, progress: &dyn Progress) -> Result<(), String> {
     let t0 = Instant::now();
@@ -358,6 +371,8 @@ pub fn provision(r: &Run) -> Result<Manifest, String> {
                     Ok(())
                 }
                 Stage::Genesis => {
+                    r.progress.update(Stage::Genesis, StageStatus::Running("contacting the shard supervisor".into()));
+                    ensure_supervisor(p, r.headless)?;
                     // Resuming after a failure (Try again, or a reinstall):
                     // the supervisor sits in Failed or Stopped until asked.
                     if let Ok(resp) = control::call(p, &Request::Status, Duration::from_secs(5)) {

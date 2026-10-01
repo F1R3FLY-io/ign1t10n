@@ -21,6 +21,10 @@ pub fn register_agent(_waiting: &dyn Fn(&str)) -> Result<(), String> {
     super::launch_supervisor_directly(&crate::paths::Paths::from_env())
 }
 
+pub fn start_agent() -> Result<(), String> {
+    super::launch_supervisor_directly(&crate::paths::Paths::from_env())
+}
+
 pub fn unregister_agent() -> Result<(), String> {
     Ok(())
 }

@@ -102,7 +102,15 @@ for b in "$C/Helpers/f1r3node" "$C/Helpers/embers" "$C/MacOS/ign1t10n"; do
   case " $LOCAL_LIBS " in *" $b "*) ENT="$HERE/entitlements-local-libs.plist" ;; esac
   codesign --force --options runtime $TS --entitlements "$ENT" -s "$SIGN" "$b"
 done
-codesign --force --options runtime $TS --entitlements "$HERE/entitlements.plist" -s "$SIGN" "$APP"
+if [ "$SIGN" = "-" ]; then
+  # Ad-hoc: give the app a designated requirement that does not change from
+  # build to build (an ad-hoc default names the exact code hash), so macOS
+  # can recognise a rebuilt app as the one whose background item it approved.
+  codesign --force --options runtime $TS --entitlements "$HERE/entitlements.plist" -s - \
+    -r='designated => identifier "io.f1r3fly.ign1t10n"' "$APP"
+else
+  codesign --force --options runtime $TS --entitlements "$HERE/entitlements.plist" -s "$SIGN" "$APP"
+fi
 codesign --verify --deep --strict "$APP"
 
 pkgbuild --analyze --root "$WORK/root" "$WORK/ign1t10n-components.plist"

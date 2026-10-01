@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+  <title>ign1t10n</title>
+  <organization>io.f1r3fly</organization>
+  <!-- Decision 2: Apple silicon only. Decision 3: macOS 13.0 or later. -->
+  <options customize="never" require-scripts="false" hostArchitectures="arm64" rootVolumeOnly="true"/>
+  <volume-check>
+    <allowed-os-versions><os-version min="13.0"/></allowed-os-versions>
+  </volume-check>
+  <welcome file="welcome.html" mime-type="text/html"/>
+  <license file="LICENSE.txt"/>
+  <conclusion file="conclusion.html" mime-type="text/html"/>
+  <choices-outline>
+    <line choice="gaze"/>
+    <line choice="ign1t10n"/>
+  </choices-outline>
+  <!-- F1R3Gaze is installed only when it is absent or older than the bundled version. -->
+  <choice id="gaze" title="F1R3Gaze" visible="false">
+    <pkg-ref id="io.f1r3fly.f1r3gaze"/>
+  </choice>
+  <choice id="ign1t10n" title="ign1t10n" visible="false">
+    <pkg-ref id="io.f1r3fly.ign1t10n"/>
+  </choice>
+  <pkg-ref id="io.f1r3fly.f1r3gaze" version="0.1.0" onConclusion="none">f1r3gaze.pkg</pkg-ref>
+  <pkg-ref id="io.f1r3fly.ign1t10n" version="0.1.0" onConclusion="none">ign1t10n-component.pkg</pkg-ref>
+  <pkg-ref id="io.f1r3fly.f1r3gaze">
+    <bundle-version><bundle CFBundleShortVersionString="0.1.0" CFBundleVersion="0.1.0" id="io.f1r3fly.f1r3gaze" path="F1R3Gaze.app"/></bundle-version>
+  </pkg-ref>
+</installer-gui-script>

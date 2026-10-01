@@ -227,7 +227,13 @@ impl Delegate {
                     self.alert("Could not open F1R3Gaze", &e, &["OK"]).ignore();
                 }
             }
-            Action::Start => self.call(Request::Start),
+            Action::Start => {
+                if let Err(e) = provision::ensure_supervisor(&p, false) {
+                    self.alert("The shard supervisor could not be started", &e, &["OK"]).ignore();
+                    return;
+                }
+                self.call(Request::Start)
+            }
             Action::Stop => self.call(Request::Stop),
             Action::Retry => self.call(Request::Retry),
             Action::Undo => self.call(Request::Undo),
@@ -582,8 +588,45 @@ pub fn run(first_run: bool) -> Result<(), String> {
     let delegate = Delegate::new(mtm, paths.clone());
     delegate.install_status_item();
     let provisioned = crate::manifest::Manifest::load(&paths).ok().flatten().map(|m| m.stages.complete()).unwrap_or(false);
-    if first_run || !provisioned {
+    // --first-run comes from the installer: resume setup if unfinished, and
+    // in any case end with F1R3Gaze open on the running shard.
+    if !provisioned {
         delegate.first_run();
+    } else {
+        // Setup is done: on every launch (including after a reinstall) make
+        // sure the supervisor runs on this copy of ign1t10n, without waiting
+        // for a menu click. Off the main thread: it may wait for launchd.
+        let p = paths.clone();
+        std::thread::spawn(move || {
+            // Keep the launch agent pointing at this copy (idempotent; also
+            // retires an SMAppService registration from earlier versions).
+            if let Err(e) = crate::platform::register_agent(&|w| crate::info!("{w}")) {
+                crate::warn!("launch agent: {e}");
+            }
+            if let Err(e) = provision::ensure_supervisor(&p, false) {
+                crate::warn!("could not start the shard supervisor: {e}");
+                crate::platform::notify("Local shard", &format!("The shard supervisor could not be started: {e}"));
+                return;
+            }
+            if first_run {
+                // Installed or updated: open the browser once the shard runs.
+                let running = crate::admin::wait_for("the shard to run", Duration::from_secs(600), Duration::from_secs(2), || {
+                    control::call(&p, &Request::Status, Duration::from_secs(5))
+                        .ok()
+                        .and_then(|r| r.status)
+                        .filter(|st| matches!(st.shard, crate::control::ShardState::Running | crate::control::ShardState::Degraded(_)))
+                        .map(|_| ())
+                });
+                match running {
+                    Ok(()) => {
+                        if let Err(e) = crate::platform::open_gaze() {
+                            crate::warn!("could not open F1R3Gaze: {e}");
+                        }
+                    }
+                    Err(e) => crate::warn!("not opening F1R3Gaze: {e}"),
+                }
+            }
+        });
     }
     delegate.refresh();
     let target: &AnyObject = &delegate;

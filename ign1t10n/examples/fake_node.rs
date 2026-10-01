@@ -28,7 +28,9 @@ fn main() {
     } else {
         let conf = args.windows(2).find(|w| w[0] == "--config-file").map(|w| w[1].clone()).expect("--config-file");
         let text = std::fs::read_to_string(&conf).unwrap();
-        let port = conf_value(&text, "port-http").expect("port-http").parse().unwrap();
+        // As the real node: a port option's default overrides the config file.
+        let _ = conf_value(&text, "port-http");
+        let port: u16 = args.windows(2).find(|w| w[0] == "--api-port-http").map(|w| w[1].parse().unwrap()).unwrap_or(40403);
         let name = std::path::Path::new(&conf).file_stem().unwrap().to_string_lossy().to_string();
         let id = format!("{:040x}", name.bytes().fold(0u128, |a, b| a.wrapping_mul(131).wrapping_add(b as u128)));
         if args.iter().any(|a| a.contains("private-key-path")) && std::env::var("F1R3NODE_VALIDATOR_PASSWORD").is_err() {
@@ -46,11 +48,15 @@ fn main() {
         std::process::exit(2)
     });
     eprintln!("fake {role} on {port}");
+    // As the real node does at startup.
+    println!(r#"{{"message":"Local peer node: rnode://{id}@127.0.0.1?protocol={}&discovery={}","target":"node"}}"#, port.saturating_sub(3), port + 1);
     let t0 = Instant::now();
     let lock: Arc<Mutex<()>> = Arc::default();
     for s in l.incoming().flatten() {
         let (id, role, chain_dir, lock) = (id.clone(), role.clone(), chain_dir.clone(), lock.clone());
         let chain_dir2 = chain_dir.clone();
+        let chain_dir_s = chain_dir.clone().unwrap_or_default();
+        let chain_dir3 = chain_dir.clone();
         let active = move || -> BTreeSet<String> {
             let Some(d) = &chain_dir else { return BTreeSet::new() };
             let mut set: BTreeSet<String> = std::fs::read_to_string(d.join("genesis/bonds.txt")).unwrap_or_default().lines().filter_map(|l| l.split_whitespace().next().map(str::to_string)).collect();
@@ -95,9 +101,15 @@ fn main() {
             let ready = t0.elapsed().as_millis() > 800;
             let (code, out) = match path.as_str() {
                 "/api/service/ready" => (200, "{}".to_string()),
+                // A real ceremony master has no Casper engine before genesis.
+                "/api/status" if role == "bootstrap" && !std::path::Path::new(&chain_dir_s).join("genesis-done").exists() => (503, r#"{"error":"casper_not_ready"}"#.into()),
                 "/api/status" => (200, format!(r#"{{"address":"rnode://{id}@127.0.0.1?protocol=1&discovery=2","isReady":{ready},"peers":3,"lastFinalizedBlockNumber":{lfb},"version":{{"node":"fake 0.0"}},"isValidator":{},"isReadOnly":{}}}"#, role.starts_with("validator"), role == "observer")),
                 "/api/ready" => if ready { (200, r#"{"ready":true}"#.into()) } else { (503, r#"{"ready":false}"#.into()) },
-                "/api/blocks/0/0" => (200, r#"[{"blockHash":"9e3a5fake0genesis","blockNumber":0}]"#.into()),
+                "/api/blocks/0/0" => {
+                    if let Some(d) = &chain_dir3 { let _ = std::fs::write(d.join("genesis-done"), ""); }
+                    (200, r#"[{"blockHash":"9e3a5fake0genesis","blockNumber":0}]"#.into())
+                }
+                "/api/blocks/0/0-unused" => (200, r#"[{"blockHash":"9e3a5fake0genesis","blockNumber":0}]"#.into()),
                 "/api/last-finalized-block" => (200, format!(r#"{{"blockInfo":{{"blockHash":"b{lfb}","blockNumber":{lfb}}}}}"#)),
                 "/api/deploy" => {
                     let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();

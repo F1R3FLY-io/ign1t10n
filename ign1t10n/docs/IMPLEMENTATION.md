@@ -105,6 +105,18 @@ Not verified here:
 * **The genesis ceremony waits for N0 − 1 approvals**, not N0: the node
   requires strictly fewer approvals than genesis validators (found on the
   first real-node run; the node's Docker shard uses 2 of 3).
+* **Ports go on the command line.** The node's port options have default
+  values (`--protocol-port 40400`, `--api-port-http 40403`, …) that override
+  the configuration file, so ign1t10n passes all six ports explicitly
+  (found on the first real multi-node run). The stand-in node now does the
+  same, so the end-to-end test would catch a regression.
+* **The network id goes on the command line too.** `protocol-client.network-id`
+  defaults to a reference to the server's id that is resolved before
+  ign1t10n's file is read, so outgoing messages said "testnet" and every peer
+  refused them. `--network-id` sets both; `common.conf` sets both as well.
+* **The bootstrap's node id comes from its output.** During the genesis
+  ceremony a bootstrap waits for its first connection and cannot answer
+  `/api/status`; the supervisor reads the id it prints at startup.
 * **Node logs go to standard output** (`logging.sink = "stdout"`), which the
   supervisor writes to the rotating `<node>.stdout.log`.
 * **Before G1**, the F1R3Gaze wallet is found by parsing `f1r3gaze wallet list`
@@ -126,3 +138,56 @@ ign1t10n ctl reset [--validators N] --yes | uninstall --yes [--keep-archive]
 ```
 
 Tests: `cargo test -- --test-threads=1`.
+
+## Known issues (from manual testing)
+
+* **No feedback between the installer and the setup window.** After the
+  installer's Close, nothing visible happens until ign1t10n's window appears
+  (the installer's last step first stops the old supervisor). Needs a visible
+  sign of progress, e.g. open the app first and let it show "Restarting the
+  shard supervisor…".
+* **Moving every clashing node at once.** When a later start finds the
+  shard's ports taken (e.g. a Docker shard came back), the menu offers to
+  move one node at a time; it should offer to move all of them.
+* **The supervisor is a classic per-user launch agent, not an SMAppService
+  agent** (deviation from spec §5.2). ign1t10n writes
+  `~/Library/LaunchAgents/io.f1r3fly.ign1t10n.supervisor.plist` with the
+  supervisor's absolute path and loads it with `launchctl bootstrap`,
+  rewriting and reloading it whenever the path or contents differ, and
+  removes any SMAppService registration from earlier versions. Reason: after
+  a reinstall, launchd kept a stale background-task entry id for the
+  SMAppService agent, could not resolve its app-relative program path
+  (`copy_bundle_path … Invalid or missing Program/ProgramArguments`), and never
+  started the supervisor again; re-registering did not repair it. macOS 13
+  remains the minimum. The agent still appears under Login Items.
+* **Background item after reinstalling an ad-hoc build** (superseded by the
+  above; kept for the record). launchd refuses to
+  spawn the supervisor (`spawn failed`, `EX_CONFIG`) because the registration
+  belongs to the previous build's signature. The app now re-registers when
+  launchd does not run it, and ad-hoc builds get a fixed designated
+  requirement. Developer ID builds keep a stable identity and should not
+  hit this; to be confirmed when signing is set up.
+* **Embers' contracts do not parse on the pinned node.** Embers `28e50d4`
+  deploys its "agents" environment; node `fce422a` rejects the term with
+  parse errors around `contract toAgentHeader(@(version, agent), ret)` and
+  `recordDeploy` in `packages/embers/templates/agents/init.rho` (an
+  identifier, likely `agent`, and the method call on it). Suspected: a word
+  that became reserved in the node's grammar. Needs a compatible version
+  pair in versions.toml, and the release smoke job should deploy Embers'
+  contracts so a mismatch fails the build. Workaround: `ctl embers off`.
+* **Health check:** `ign1t10n ctl status` gives each node's readiness, last
+  finalised block and peers; a funded test deploy (`ctl fund`) exercises
+  signing, deploy, proposal and finalisation end to end.
+
+## Requests to other projects
+
+* **F1R3Gaze, G5: a shard health "app".** A page in F1R3Gaze that reports a
+  shard's health, defaulting to the shard F1R3Gaze is configured for (the
+  local shard when ign1t10n set it up) but able to point at any reachable
+  shard by its observer and validator URLs. It should show what
+  `ign1t10n ctl status` and the health check above show: each node's
+  readiness, last finalised block and peers; whether finalisation is
+  advancing; a balance read through the observer; and, on request, a small
+  test deploy whose finalisation it follows end to end. It reads only the
+  nodes' public HTTP APIs, so it needs nothing from ign1t10n and works
+  against any shard.

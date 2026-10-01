@@ -66,6 +66,11 @@ pub fn common(p: &Paths, m: &Manifest) -> String {
     format!(
         r#"# Rendered by ign1t10n ({profile}). The node loads its built-in defaults.conf first;
 # these are docker/conf/default.conf's values, generalised to loopback and tuned for a laptop.
+protocol-client {{
+  # The built-in default refers to protocol-server.network-id, but resolves it
+  # before this file is read, so it would stay "testnet". Set it too.
+  network-id = "{net}"
+}}
 protocol-server {{
   network-id = "{net}"
   bind-address = "127.0.0.1"
@@ -208,6 +213,7 @@ mod tests {
         let c = common(&p, &m);
         assert!(c.contains("host = \"127.0.0.1\""));
         assert!(c.contains("reject-foreign-origin = true"));
+        assert_eq!(c.matches(&format!("network-id = \"{}\"", m.shard.network_id)).count(), 2, "client and server");
         assert!(c.contains("required-signatures = 1"), "fewer approvals than genesis validators");
         assert!(c.contains("sink = \"stdout\""));
         assert!(c.contains(&format!("\"{}/genesis/bonds.txt\"", p.state.display())));

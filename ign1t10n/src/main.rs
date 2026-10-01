@@ -179,6 +179,13 @@ fn main() {
         Some("--help" | "-h") => println!("{USAGE}"),
         Some("supervise") => {
             if let Err(e) = ign1t10n::supervisor::Supervisor::new(p).run() {
+                if e.contains("already running") {
+                    // Another supervisor serves the shard: exit cleanly, so
+                    // launchd does not keep retrying (KeepAlive restarts only
+                    // after a failure).
+                    ign1t10n::info!("{e}; exiting");
+                    return;
+                }
                 ign1t10n::error!("{e}");
                 // Non-zero: launchd restarts us (KeepAlive SuccessfulExit = false).
                 die(e);

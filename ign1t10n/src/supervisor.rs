@@ -159,6 +159,10 @@ impl Supervisor {
             let _awake = if what == "start" || what == "resize" { crate::platform::prevent_idle_sleep(what) } else { None };
             if let Err(e) = f(&s) {
                 error!("{what}: {e}");
+                if what == "start" {
+                    // Do not leave half a shard running (or restarting).
+                    s.stop_nodes();
+                }
                 s.set_state(ShardState::Failed(e.clone()));
                 crate::platform::notify("Local shard", &format!("{what} failed: {e}"));
             }
@@ -298,12 +302,18 @@ impl Supervisor {
         if !self.running(&Role::Bootstrap) {
             self.spawn_node(Role::Bootstrap)?;
         }
+        // During the genesis ceremony the bootstrap has no Casper engine yet, so
+        // /api/status cannot answer; but the node prints its identity at
+        // startup ("Local peer node: rnode://<id>@..."), which reaches
+        // bootstrap.stdout.log. Read whichever comes first.
         let boot = self.api(&Role::Bootstrap)?;
+        let log = self.paths.stdout_log("bootstrap");
+        let started = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
         let id = admin::wait_for("the bootstrap's node id", Duration::from_secs(120), Duration::from_secs(1), || {
             if !self.running(&Role::Bootstrap) {
-                return Some(Err("the bootstrap exited".to_string()));
+                return Some(Err(format!("the bootstrap exited; see {}", log.display())));
             }
-            boot.status().ok().and_then(|s| s.node_id).map(Ok)
+            node_id_from_log(&log, started).or_else(|| boot.status().ok().and_then(|s| s.node_id)).map(Ok)
         })??;
         if m.bootstrap.node_id.as_deref() != Some(&id) {
             self.update(|m| {
@@ -437,7 +447,13 @@ impl Supervisor {
     /// Ordered stop (spec §7.4): observer and Embers, then every validator at
     /// once, then the bootstrap.
     pub fn stop_nodes(&self) {
-        self.lock().want = false;
+        {
+            // No restart that was already scheduled may outlive the stop.
+            let mut g = self.lock();
+            g.want = false;
+            g.restart_at.clear();
+            g.exits.clear();
+        }
         self.stop_role(&Role::Embers, Duration::from_secs(30));
         self.stop_role(&Role::Observer, Duration::from_secs(30));
         let mut vs: Vec<Proc> = {
@@ -487,7 +503,7 @@ impl Supervisor {
                 let delay = Duration::from_secs((1u64 << n.min(6)).min(60));
                 g.restart_at.insert(r.clone(), (now + delay, n));
             }
-            if failed.is_none() && g.want {
+            if failed.is_none() && g.want && !matches!(g.state, ShardState::Stopped | ShardState::Failed(_)) {
                 let now = Instant::now();
                 restart = g.restart_at.iter().filter(|(r, (t, _))| *t <= now && !g.procs.contains_key(*r)).map(|(r, _)| r.clone()).collect();
             }
@@ -907,6 +923,21 @@ impl Supervisor {
     }
 }
 
+/// The node id a node printed at startup ("Local peer node: rnode://<id>@…"),
+/// looking only at what was written after byte `from` of its output log.
+pub fn node_id_from_log(log: &std::path::Path, from: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(log).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(if from <= len { from } else { 0 })).ok()?;
+    let mut text = String::new();
+    f.take(4 << 20).read_to_string(&mut text).ok()?;
+    text.lines().rev().find_map(|l| {
+        let i = l.find("rnode://")?;
+        crate::api::node_id_of(l[i..].split(['"', ' ']).next()?)
+    })
+}
+
 /// The resize engine's effects, performed by the supervisor.
 struct SupOps {
     sup: Supervisor,
@@ -1095,5 +1126,20 @@ impl Ops for SupOps {
             Ok(())
         })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn node_id_from_startup_log() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("bootstrap.stdout.log");
+        std::fs::write(&log, "old line rnode://aaaa@127.0.0.1?protocol=1\n").unwrap();
+        let from = std::fs::metadata(&log).unwrap().len();
+        assert_eq!(super::node_id_from_log(&log, from), None, "only this run's output counts");
+        let line = r#"{"message":"Local peer node: rnode://0d529f30dce004fe1ea5c88819eb3a36f0495e67@127.0.0.1?protocol=40400&discovery=40404","target":"node"}"#;
+        std::fs::write(&log, format!("old line rnode://aaaa@127.0.0.1?protocol=1\n{line}\n")).unwrap();
+        assert_eq!(super::node_id_from_log(&log, from).as_deref(), Some("0d529f30dce004fe1ea5c88819eb3a36f0495e67"));
     }
 }

@@ -117,79 +117,160 @@ pub fn check_gaze_signature() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// SMAppService (ServiceManagement, macOS 13+).
+// The supervisor's launch agent.
+//
+// A classic per-user launch agent: ~/Library/LaunchAgents/<label>.plist with
+// the supervisor's ABSOLUTE path, loaded with `launchctl bootstrap`. The
+// spec chose SMAppService (§5.2), which stores the program relative to the
+// app and finds the app through the background-task database by entry id;
+// after a reinstall launchd kept a stale id, could not resolve the path
+// ("copy_bundle_path … Invalid or missing Program/ProgramArguments") and
+// never started the supervisor again. An absolute path has no such link to
+// break. macOS still lists the agent under Login Items, where the person can
+// switch it off; ign1t10n then says so.
 
 #[link(name = "ServiceManagement", kind = "framework")]
 unsafe extern "C" {}
 
 const SM_NOT_REGISTERED: isize = 0;
-const SM_ENABLED: isize = 1;
-const SM_REQUIRES_APPROVAL: isize = 2;
 
-fn agent_service() -> Retained<AnyObject> {
+fn uid() -> u32 {
+    unsafe { libc::getuid() }
+}
+
+fn domain() -> String {
+    format!("gui/{}", uid())
+}
+
+fn target() -> String {
+    format!("{}/{}", domain(), crate::AGENT_LABEL)
+}
+
+pub fn agent_plist_path() -> std::path::PathBuf {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    home.join("Library/LaunchAgents").join(format!("{}.plist", crate::AGENT_LABEL))
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// The agent's plist for the supervisor at `exe`.
+pub fn agent_plist(exe: &std::path::Path) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by ign1t10n; rewritten when ign1t10n moves or is updated. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{exe}</string>
+    <string>supervise</string>
+  </array>
+  <key>AssociatedBundleIdentifiers</key><array><string>{bundle}</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
+</dict>
+</plist>
+"#,
+        label = crate::AGENT_LABEL,
+        exe = xml_escape(&exe.display().to_string()),
+        bundle = crate::BUNDLE_ID,
+    )
+}
+
+fn launchctl(args: &[&str]) -> Result<String, String> {
+    let out = Command::new("/bin/launchctl").args(args).output().map_err(|e| e.to_string())?;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if out.status.success() { Ok(text) } else { Err(format!("launchctl {}: {}", args.join(" "), text.trim())) }
+}
+
+fn loaded() -> bool {
+    launchctl(&["print", &target()]).is_ok()
+}
+
+/// What the loaded job will run, if it is loaded.
+fn loaded_program() -> Option<String> {
+    let text = launchctl(&["print", &target()]).ok()?;
+    let mut lines = text.lines();
+    lines.find(|l| l.trim_start().starts_with("arguments = {"))?;
+    lines.next().map(|l| l.trim().to_string())
+}
+
+/// Remove a registration made by earlier versions through SMAppService
+/// (it holds the same label and, after a reinstall, cannot start).
+fn retire_smappservice() {
     let name = NSString::from_str(crate::AGENT_PLIST);
-    unsafe { msg_send_id![class!(SMAppService), agentServiceWithPlistName: &*name] }
-}
-
-fn status() -> isize {
-    let svc = agent_service();
-    unsafe { msg_send![&*svc, status] }
-}
-
-pub fn agent_enabled() -> Option<bool> {
-    Some(status() == SM_ENABLED)
+    let svc: Retained<AnyObject> = unsafe { msg_send_id![class!(SMAppService), agentServiceWithPlistName: &*name] };
+    let status: isize = unsafe { msg_send![&*svc, status] };
+    if status != SM_NOT_REGISTERED {
+        let mut err: *mut AnyObject = std::ptr::null_mut();
+        let _: bool = unsafe { msg_send![&*svc, unregisterAndReturnError: &mut err] };
+        crate::info!("removed the earlier SMAppService registration of the supervisor");
+    }
 }
 
 pub fn open_login_items() {
-    unsafe {
-        let _: () = msg_send![class!(SMAppService), openSystemSettingsLoginItems];
+    let _ = Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.LoginItems-Settings.extension").status();
+}
+
+/// S6, and whenever the supervisor must run: make sure the agent's plist
+/// names this copy of ign1t10n, and that launchd has it loaded.
+pub fn register_agent(waiting: &dyn Fn(&str)) -> Result<(), String> {
+    retire_smappservice();
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = exe.canonicalize().unwrap_or(exe);
+    let path = agent_plist_path();
+    let want = agent_plist(&exe);
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    let exe_s = exe.display().to_string();
+    if have == want && loaded() && loaded_program().as_deref() == Some(exe_s.as_str()) {
+        return Ok(());
+    }
+    crate::paths::write_atomic(&path, want.as_bytes(), 0o644).map_err(|e| format!("{}: {e}", path.display()))?;
+    if loaded() {
+        let _ = launchctl(&["bootout", &target()]);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    match launchctl(&["bootstrap", &domain(), &path.display().to_string()]) {
+        Ok(_) => {
+            crate::info!("launch agent loaded: {exe_s} supervise");
+            Ok(())
+        }
+        Err(e) => {
+            // Usually: switched off under Login Items ("Operation not permitted").
+            waiting("ign1t10n's background item is switched off. Turn on ign1t10n in System Settings › General › Login Items › Allow in the Background.");
+            open_login_items();
+            Err(format!("{e}. If ign1t10n is switched off in System Settings › General › Login Items, switch it on and try again."))
+        }
     }
 }
 
-/// S6: register the launch agent; if macOS asks for approval, explain,
-/// open the Login Items settings, and wait for the person to allow it.
-pub fn register_agent(waiting: &dyn Fn(&str)) -> Result<(), String> {
-    let svc = agent_service();
-    if status() != SM_ENABLED {
-        let mut err: *mut AnyObject = std::ptr::null_mut();
-        let ok: bool = unsafe { msg_send![&*svc, registerAndReturnError: &mut err] };
-        if !ok && status() != SM_REQUIRES_APPROVAL {
-            let desc = if err.is_null() {
-                "unknown error".to_string()
-            } else {
-                let d: Retained<NSString> = unsafe { msg_send_id![&*err, localizedDescription] };
-                d.to_string()
-            };
-            return Err(format!("could not register the background item: {desc}"));
-        }
-    }
-    let t0 = std::time::Instant::now();
-    let mut asked = false;
-    loop {
-        match status() {
-            SM_ENABLED => return Ok(()),
-            SM_REQUIRES_APPROVAL => {
-                if !asked {
-                    waiting("macOS asks you to allow ign1t10n in System Settings › General › Login Items. Turn it on to start the shard.");
-                    open_login_items();
-                    asked = true;
-                }
-            }
-            SM_NOT_REGISTERED if t0.elapsed().as_secs() > 5 => return Err("the background item was not registered".into()),
-            _ => {}
-        }
-        if t0.elapsed().as_secs() > 1800 {
-            return Err("the background item was not approved".into());
-        }
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+pub fn agent_enabled() -> Option<bool> {
+    Some(loaded())
+}
+
+/// Start the supervisor: ensure the agent is current and loaded (loading it
+/// starts it, RunAtLoad), then kickstart in case it was loaded but stopped.
+pub fn start_agent() -> Result<(), String> {
+    register_agent(&|w| crate::info!("{w}"))?;
+    let _ = launchctl(&["kickstart", &target()]);
+    Ok(())
 }
 
 pub fn unregister_agent() -> Result<(), String> {
-    let svc = agent_service();
-    let mut err: *mut AnyObject = std::ptr::null_mut();
-    let ok: bool = unsafe { msg_send![&*svc, unregisterAndReturnError: &mut err] };
-    if ok || status() == SM_NOT_REGISTERED { Ok(()) } else { Err("could not unregister the background item".into()) }
+    retire_smappservice();
+    if loaded() {
+        launchctl(&["bootout", &target()])?;
+    }
+    let _ = std::fs::remove_file(agent_plist_path());
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
