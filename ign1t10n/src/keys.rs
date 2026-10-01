@@ -77,13 +77,17 @@ pub fn new_password() -> String {
     hex::encode(crate::random_bytes::<32>())
 }
 
-/// The shipped development public keys (docker/.env.example, bonds.txt of the
-/// pinned node). A generated key must never equal one of these (A5); the
-/// release pipeline also greps artifacts for them.
+/// The development public keys the node repository ships
+/// (`docker/.env.example`: bootstrap/standalone, validators 1 to 4). A
+/// generated key must never equal one of these (A5). Public keys only: the
+/// release check (`build.sh`) separately ensures no development *private*
+/// key is in the package.
 pub const DEVELOPMENT_PUBLIC_KEYS: &[&str] = &[
+    "04ffc016579a68050d655d55df4e09f04605164543e257c8e6df10361e6068a5336588e9b355ea859c5ab4285a5ef0efdf62bc28b80320ce99e26bb1607b3ad93d",
     "04fa70d7be5eb750e0915c0f6d19e7085d18bb1c22d030feb2a877ca2cd226d04438aa819359c56c720142fbc66e9da03a5ab960a3d8b75363a226b7c800f60420",
     "04837a4cff833e3157e3135d7b40b8e1f33c6e6b5a4342b9fc784230ca4c4f9d356f258debef56ad4984726d6ab3e7709e1632ef079b4bcd653db00b68b2df065f",
     "0457febafcc25dd34ca5e5c025cd445f60e5ea6918931a54eb8c3a204f51760248090b0c757c2bdad7b8c4dca757e109f8ef64737d90712724c8216c94b4ae661c",
+    "04d26c6103d7269773b943d7a9c456f9eb227e0d8b1fe30bccee4fca963f4446e3385d99f6386317f2c1ad36b9e6b0d5f97bb0a0041f05781c60a5ebca124a251d",
 ];
 
 #[cfg(test)]

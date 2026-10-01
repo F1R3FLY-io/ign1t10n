@@ -192,11 +192,16 @@ pub fn ensure_gaze(p: &Paths) -> Result<(), String> {
         return Err(format!("IGN1T10N_GAZE_BIN names {}, which does not exist", p.gaze_bin().display()));
     }
     if !p.bundled_gaze.exists() {
-        return Err(format!(
-            "F1R3Gaze is not installed and this copy of ign1t10n does not carry it ({} is missing). \
-             Install ign1t10n from its package, or for development set IGN1T10N_GAZE_BIN to a f1r3gaze executable.",
-            p.bundled_gaze.display()
-        ));
+        let looked: Vec<String> = p.gaze_candidates().iter().map(|c| format!("  {}", c.display())).collect();
+        let how = if p.in_app_bundle() {
+            "This ign1t10n.app does not carry F1R3Gaze. Reinstall ign1t10n from its package, which installs both.".to_string()
+        } else {
+            format!(
+                "This is a development build ({}), which carries no copy. Install F1R3Gaze, put f1r3gaze on your PATH, or set IGN1T10N_GAZE_BIN to a f1r3gaze executable.",
+                p.self_bin.display()
+            )
+        };
+        return Err(format!("F1R3Gaze is not installed. Looked for f1r3gaze at:\n{}\n{how}", looked.join("\n")));
     }
     let installed = crate::platform::install_app(&p.bundled_gaze, &Paths::gaze_app_locations())?;
     info!("installed F1R3Gaze at {}", installed.display());
@@ -279,7 +284,8 @@ fn await_genesis(p: &Paths, progress: &dyn Progress) -> Result<(), String> {
                 if let Some(st) = r.status {
                     match st.shard {
                         ShardState::Running | ShardState::Degraded(_) if st.genesis_hash.is_some() => return Ok(()),
-                        ShardState::Failed(e) => return Err(e),
+                        // A restart just requested may not have left Failed yet.
+                        ShardState::Failed(e) if t0.elapsed() > Duration::from_secs(5) => return Err(e),
                         s => {
                             let l = s.label();
                             if l != last {
@@ -352,6 +358,14 @@ pub fn provision(r: &Run) -> Result<Manifest, String> {
                     Ok(())
                 }
                 Stage::Genesis => {
+                    // Resuming after a failure (Try again, or a reinstall):
+                    // the supervisor sits in Failed or Stopped until asked.
+                    if let Ok(resp) = control::call(p, &Request::Status, Duration::from_secs(5)) {
+                        if matches!(resp.status.map(|s| s.shard), Some(ShardState::Failed(_) | ShardState::Stopped)) {
+                            let _ = control::call(p, &Request::Start, Duration::from_secs(10));
+                            std::thread::sleep(Duration::from_secs(1));
+                        }
+                    }
                     await_genesis(p, r.progress)?;
                     m = Manifest::load(p)?.ok_or("shard.toml disappeared")?;
                     Ok(())

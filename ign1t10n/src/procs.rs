@@ -53,7 +53,7 @@ pub fn node_args(p: &Paths, m: &Manifest, role: &Role) -> Result<Vec<String>, St
             // The node's default `bootstrap` is empty: the bootstrap starts its
             // peer table alone, and ign1t10n reads its id from /api/status.
             a.extend(["--validator-private-key-path".into(), p.key("bootstrap").display().to_string()]);
-            a.extend(["--required-signatures".into(), m.shard.genesis_validators.to_string(), "--ceremony-master-mode".into(), "--heartbeat-disabled".into()]);
+            a.extend(["--required-signatures".into(), crate::nodeconf::required_signatures(m.shard.genesis_validators).to_string(), "--ceremony-master-mode".into(), "--heartbeat-disabled".into()]);
         }
         Role::Validator(k) => {
             a.extend(["--bootstrap".into(), bootstrap_address(m).ok_or("bootstrap node id unknown")?]);
@@ -167,7 +167,7 @@ mod tests {
         assert!(!node_args(&p, &m, &Role::Validator(1)).unwrap().contains(&"--genesis-validator".to_string()));
         let b = node_args(&p, &m, &Role::Bootstrap).unwrap();
         assert!(!b.contains(&"--bootstrap".to_string()));
-        assert!(b.windows(2).any(|w| w[0] == "--required-signatures" && w[1] == "2"));
+        assert!(b.windows(2).any(|w| w[0] == "--required-signatures" && w[1] == "1"), "N0 - 1 approvals");
         let o = node_args(&p, &m, &Role::Observer).unwrap();
         assert!(!o.iter().any(|a| a.contains("private-key")));
         assert_eq!(Role::parse("validator-7"), Some(Role::Validator(7)));

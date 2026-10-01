@@ -22,6 +22,14 @@ use crate::ports::Block;
 
 pub const TIMING_PROFILE: &str = "laptop-v1";
 
+/// Approvals the genesis ceremony waits for. The node requires strictly fewer
+/// than the number of genesis validators (`approve_block_protocol.rs`: "Required
+/// sigs must be smaller than the number of bonded validators"); its own Docker
+/// shard uses 2 of 3. So N0 − 1, at least 1.
+pub fn required_signatures(n0: u8) -> u8 {
+    n0.saturating_sub(1).max(1)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Timing {
     pub casper_loop_ms: u64,
@@ -88,7 +96,7 @@ casper {{
     self-propose-cooldown = {hsc} seconds
   }}
   genesis-ceremony {{
-    required-signatures = {n0}
+    required-signatures = {sigs}
     approve-interval = 10 seconds
     approve-duration = 1 minutes
   }}
@@ -103,8 +111,9 @@ casper {{
 }}
 logging {{
   format = "json"
-  sink = "file"
-  file {{ rotation = "daily", retention = 7 }}
+  # To standard output, which ign1t10n writes to <node>.stdout.log (rotated),
+  # so a node's own errors land where ign1t10n's messages point.
+  sink = "stdout"
 }}
 metrics {{ prometheus = true }}
 "#,
@@ -119,7 +128,7 @@ metrics {{ prometheus = true }}
         hci = t.heartbeat_check_interval_s,
         hla = t.heartbeat_max_lfb_age_s,
         hsc = t.heartbeat_self_propose_cooldown_s,
-        n0 = m.shard.genesis_validators,
+        sigs = required_signatures(m.shard.genesis_validators),
         max = crate::MAX_VALIDATORS,
     )
 }
@@ -176,6 +185,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn required_signatures_are_fewer_than_genesis_validators() {
+        for n0 in crate::MIN_VALIDATORS..=crate::MAX_VALIDATORS {
+            let r = required_signatures(n0);
+            assert!(r >= 1 && r < n0);
+        }
+    }
+
+    #[test]
     fn timing_is_monotone_and_bounded() {
         assert_eq!(timing(2).casper_loop_ms, 1000);
         assert_eq!(timing(10).casper_loop_ms, 3000);
@@ -191,7 +208,8 @@ mod tests {
         let c = common(&p, &m);
         assert!(c.contains("host = \"127.0.0.1\""));
         assert!(c.contains("reject-foreign-origin = true"));
-        assert!(c.contains("required-signatures = 2"));
+        assert!(c.contains("required-signatures = 1"), "fewer approvals than genesis validators");
+        assert!(c.contains("sink = \"stdout\""));
         assert!(c.contains(&format!("\"{}/genesis/bonds.txt\"", p.state.display())));
         let v = node(&p, "validator-1", 40410, "");
         assert!(v.contains("port-http = 40413"));

@@ -102,6 +102,11 @@ Not verified here:
 * **Ports are free only if nothing answers.** On macOS, binding
   `127.0.0.1:p` succeeds while another program (Docker) listens on `*:p`, so
   `ports::port_free` also tries to connect.
+* **The genesis ceremony waits for N0 − 1 approvals**, not N0: the node
+  requires strictly fewer approvals than genesis validators (found on the
+  first real-node run; the node's Docker shard uses 2 of 3).
+* **Node logs go to standard output** (`logging.sink = "stdout"`), which the
+  supervisor writes to the rotating `<node>.stdout.log`.
 * **Before G1**, the F1R3Gaze wallet is found by parsing `f1r3gaze wallet list`
   (`* ADDRESS LABEL`) and created with `wallet new "Local shard"`.
 * **The release workflow's node build asks for `crypto/vendored-openssl`**,

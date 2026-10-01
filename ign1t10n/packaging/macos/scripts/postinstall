@@ -1,12 +1,38 @@
 #!/bin/sh
-# ign1t10n component postinstall (spec §4): runs as root. It does not touch
-# the user's home: provisioning happens at first launch, as the user.
-# It only opens the app in the logged-in user's session.
-set -eu
+# ign1t10n component postinstall (spec §4): runs as root after the new
+# ign1t10n.app is in place. It does not touch the user's home; provisioning
+# happens in the app, as the user. On a reinstall or upgrade it makes the
+# new version the one that runs:
+#   1. quit a running menu-bar ign1t10n (otherwise `open` would merely bring
+#      the old, windowless copy forward);
+#   2. restart the background supervisor on the new binary: SIGTERM makes
+#      it stop the shard's nodes in order and exit, then launchd starts it
+#      again;
+#   3. open the new app, which resumes setup or shows the menu.
+set -u
 APP="/Applications/ign1t10n.app"
+LABEL="io.f1r3fly.ign1t10n.supervisor"
 USER_NAME="$(/usr/bin/stat -f %Su /dev/console)"
-if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ] && [ "$USER_NAME" != "loginwindow" ]; then
-  USER_ID="$(/usr/bin/id -u "$USER_NAME")"
-  /bin/launchctl asuser "$USER_ID" /usr/bin/sudo -u "$USER_NAME" /usr/bin/open -a "$APP" --args --first-run || true
+case "$USER_NAME" in ""|root|loginwindow) exit 0 ;; esac
+USER_ID="$(/usr/bin/id -u "$USER_NAME")"
+
+# 1. The menu bar: any ign1t10n of this user that is not the supervisor.
+for pid in $(/usr/bin/pgrep -u "$USER_ID" -x ign1t10n); do
+  case "$(/bin/ps -o args= -p "$pid")" in
+    *supervise*) ;;
+    *) /bin/kill "$pid" 2>/dev/null ;;
+  esac
+done
+
+# 2. The supervisor, if it runs: stop it cleanly, then start the new one.
+SUP="$(/usr/bin/pgrep -u "$USER_ID" -f 'ign1t10n supervise')"
+if [ -n "$SUP" ]; then
+  /bin/kill -TERM $SUP 2>/dev/null
+  i=0
+  while [ $i -lt 150 ] && /bin/kill -0 $SUP 2>/dev/null; do sleep 1; i=$((i + 1)); done
+  /bin/launchctl kickstart "gui/$USER_ID/$LABEL" 2>/dev/null || true
 fi
+
+# 3. Open the new app in the user's session.
+/bin/launchctl asuser "$USER_ID" /usr/bin/sudo -u "$USER_NAME" /usr/bin/open -a "$APP" --args --first-run || true
 exit 0

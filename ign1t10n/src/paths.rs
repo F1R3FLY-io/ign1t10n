@@ -80,8 +80,25 @@ impl Paths {
         if let Some(o) = &self.gaze_override {
             return o.clone();
         }
-        let bins: Vec<PathBuf> = Self::gaze_app_locations().into_iter().map(|a| a.join("Contents/MacOS/f1r3gaze")).collect();
+        let bins = self.gaze_candidates();
         bins.iter().find(|b| b.exists()).cloned().unwrap_or_else(|| bins[0].clone())
+    }
+
+    /// Every place `gaze_bin` looks, in order: the installed apps, then, for
+    /// a development build (not inside an app bundle), `f1r3gaze` on PATH.
+    pub fn gaze_candidates(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = Self::gaze_app_locations().into_iter().map(|a| a.join("Contents/MacOS/f1r3gaze")).collect();
+        if !self.in_app_bundle() {
+            if let Some(path) = std::env::var_os("PATH") {
+                v.extend(std::env::split_paths(&path).map(|d| d.join("f1r3gaze")));
+            }
+        }
+        v
+    }
+
+    /// Is this binary `X.app/Contents/MacOS/ign1t10n`?
+    pub fn in_app_bundle(&self) -> bool {
+        self.self_bin.parent().is_some_and(|d| d.ends_with("Contents/MacOS"))
     }
 
     pub fn manifest(&self) -> PathBuf { self.state.join("shard.toml") }
