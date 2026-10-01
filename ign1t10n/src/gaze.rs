@@ -173,12 +173,12 @@ pub fn refresh(p: &Paths, m: &mut Manifest) -> Result<(), String> {
 }
 
 fn gaze(p: &Paths, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(&p.gaze_bin)
+    let out = Command::new(p.gaze_bin())
         .arg("--profile")
         .arg(&p.profile)
         .args(args)
         .output()
-        .map_err(|e| format!("{}: {e}", p.gaze_bin.display()))?;
+        .map_err(|e| format!("{}: {e}", p.gaze_bin().display()))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {

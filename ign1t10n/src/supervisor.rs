@@ -30,6 +30,12 @@ extern "C" fn on_term(_: libc::c_int) {
     TERM.store(true, Ordering::SeqCst);
 }
 
+/// An upper bound on any single wait for a node to become ready, for test
+/// harnesses (`IGN1T10N_START_TIMEOUT_SECS`); unset in production.
+fn start_timeout_cap() -> Duration {
+    Duration::from_secs(std::env::var("IGN1T10N_START_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(u64::MAX / 4))
+}
+
 const FAILS_ALLOWED: usize = 5;
 const FAIL_WINDOW: Duration = Duration::from_secs(300);
 
@@ -217,25 +223,33 @@ impl Supervisor {
         if matches!(self.lock().state, ShardState::Starting(_) | ShardState::Stopped | ShardState::Failed(_)) {
             self.set_state(ShardState::Starting(format!("waiting for {}", role.name())));
         }
+        let timeout = timeout.min(start_timeout_cap());
         let t0 = Instant::now();
-        let check: Box<dyn Fn() -> bool> = if *role == Role::Embers {
-            let url = crate::embers::ready_url(&self.manifest()?).unwrap_or_default();
-            let http = gaze_net::Http::new();
-            Box::new(move || matches!(http.send(&gaze_net::HttpRequest { url: url.clone(), method: "GET".into(), ..Default::default() }), Ok(r) if r.status == 200))
+        let check: Box<dyn Fn() -> Result<(), String>> = if *role == Role::Embers {
+            let api = Api::new(format!("http://127.0.0.1:{}", self.manifest()?.embers.as_ref().map(|e| e.port).unwrap_or(0)));
+            Box::new(move || api.get_ok("/api/service/ready"))
         } else {
             let api = self.api(role)?;
-            Box::new(move || api.ready())
+            Box::new(move || api.ready_why())
         };
+        let mut last_note = Instant::now();
         loop {
-            if check() {
-                info!("{} ready after {}s", role.name(), t0.elapsed().as_secs());
-                return Ok(());
-            }
+            let why = match check() {
+                Ok(()) => {
+                    info!("{} ready after {}s", role.name(), t0.elapsed().as_secs());
+                    return Ok(());
+                }
+                Err(e) => e,
+            };
             if !self.running(role) {
                 return Err(format!("{} exited while starting; see {}", role.name(), self.paths.stdout_log(&role.name()).display()));
             }
             if t0.elapsed() > timeout {
-                return Err(format!("{} not ready after {}s", role.name(), timeout.as_secs()));
+                return Err(format!("{} not ready after {}s (last answer: {why})", role.name(), timeout.as_secs()));
+            }
+            if last_note.elapsed() >= Duration::from_secs(15) {
+                last_note = Instant::now();
+                info!("{} not ready yet after {}s: {why}", role.name(), t0.elapsed().as_secs());
             }
             std::thread::sleep(Duration::from_secs(1));
         }

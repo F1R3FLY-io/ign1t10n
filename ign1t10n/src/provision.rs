@@ -159,9 +159,7 @@ fn preflight(p: &Paths, m: &Manifest) -> Result<(), String> {
             return Err(format!("macOS 13 or later is required (this Mac runs {}.{})", v.0, v.1));
         }
     }
-    if !p.gaze_bin.exists() {
-        return Err(format!("F1R3Gaze is not installed ({} is missing)", p.gaze_bin.display()));
-    }
+    ensure_gaze(p)?;
     crate::platform::check_gaze_signature()?;
     if !p.node_bin.exists() {
         return Err(format!("the node binary is missing ({})", p.node_bin.display()));
@@ -181,6 +179,28 @@ fn preflight(p: &Paths, m: &Manifest) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// F1R3Gaze is part of what ign1t10n installs. The package installs it first;
+/// when it is missing anyway (the app was copied without it, or F1R3Gaze was
+/// deleted since), install the copy ign1t10n carries.
+pub fn ensure_gaze(p: &Paths) -> Result<(), String> {
+    if p.gaze_bin().exists() {
+        return Ok(());
+    }
+    if p.gaze_override.is_some() {
+        return Err(format!("IGN1T10N_GAZE_BIN names {}, which does not exist", p.gaze_bin().display()));
+    }
+    if !p.bundled_gaze.exists() {
+        return Err(format!(
+            "F1R3Gaze is not installed and this copy of ign1t10n does not carry it ({} is missing). \
+             Install ign1t10n from its package, or for development set IGN1T10N_GAZE_BIN to a f1r3gaze executable.",
+            p.bundled_gaze.display()
+        ));
+    }
+    let installed = crate::platform::install_app(&p.bundled_gaze, &Paths::gaze_app_locations())?;
+    info!("installed F1R3Gaze at {}", installed.display());
+    if p.gaze_bin().exists() { Ok(()) } else { Err(format!("F1R3Gaze was copied to {} but its executable is missing", installed.display())) }
 }
 
 fn allocate_ports(m: &mut Manifest) -> Result<(), String> {
@@ -273,8 +293,9 @@ fn await_genesis(p: &Paths, progress: &dyn Progress) -> Result<(), String> {
             Err(e) if t0.elapsed() > Duration::from_secs(60) => return Err(e),
             Err(_) => {}
         }
-        if t0.elapsed() > Duration::from_secs(1200) {
-            return Err("the shard did not finish genesis within 20 minutes".into());
+        let cap = std::env::var("IGN1T10N_START_TIMEOUT_SECS").ok().and_then(|v| v.parse::<u64>().ok()).map(|c| 3 * c).unwrap_or(1200);
+        if t0.elapsed() > Duration::from_secs(cap) {
+            return Err(format!("the shard did not finish genesis within {cap} seconds"));
         }
         std::thread::sleep(Duration::from_secs(1));
     }

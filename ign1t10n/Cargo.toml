@@ -29,6 +29,7 @@ gaze-net = { git = "https://github.com/F1R3FLY-io/F1R3Gaze", rev = "f6ee26a612f3
 k256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 pkcs8 = { version = "0.10", features = ["encryption", "pem", "std"] }
 pkcs5 = { version = "0.7", features = ["pbes2"] }
+ureq = { version = "2.12", default-features = false }
 getrandom = "0.2"
 rand = "0.8"
 hex = "0.4"

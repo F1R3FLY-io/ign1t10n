@@ -15,7 +15,12 @@ pub struct Paths {
     /// Bundled executables: `f1r3node`, `embers`, and this binary.
     pub node_bin: PathBuf,
     pub embers_bin: PathBuf,
-    pub gaze_bin: PathBuf,
+    /// `IGN1T10N_GAZE_BIN`: a `f1r3gaze` to use instead of the installed one
+    /// (development, tests).
+    pub gaze_override: Option<PathBuf>,
+    /// The copy of F1R3Gaze.app ign1t10n carries in `Contents/Resources`, to
+    /// install at first launch when F1R3Gaze is missing.
+    pub bundled_gaze: PathBuf,
     pub self_bin: PathBuf,
 }
 
@@ -50,17 +55,33 @@ impl Paths {
         });
         let self_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ign1t10n"));
         // Contents/MacOS/ign1t10n -> Contents/Helpers/<tool>
-        let helpers = self_bin.parent().and_then(Path::parent).map(|c| c.join("Helpers")).unwrap_or_default();
+        let contents = self_bin.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
+        let helpers = contents.join("Helpers");
         Paths {
             node_bin: env_path("IGN1T10N_NODE_BIN").unwrap_or_else(|| helpers.join("f1r3node")),
             embers_bin: env_path("IGN1T10N_EMBERS_BIN").unwrap_or_else(|| helpers.join("embers")),
-            gaze_bin: env_path("IGN1T10N_GAZE_BIN")
-                .unwrap_or_else(|| PathBuf::from("/Applications/F1R3Gaze.app/Contents/MacOS/f1r3gaze")),
+            gaze_override: env_path("IGN1T10N_GAZE_BIN"),
+            bundled_gaze: contents.join("Resources/F1R3Gaze.app"),
             self_bin,
             state,
             logs,
             profile,
         }
+    }
+
+    /// Where F1R3Gaze.app may be installed, in order of preference.
+    pub fn gaze_app_locations() -> Vec<PathBuf> {
+        vec![PathBuf::from("/Applications/F1R3Gaze.app"), home().join("Applications/F1R3Gaze.app")]
+    }
+
+    /// The `f1r3gaze` executable: the override, else the first installed
+    /// F1R3Gaze.app, else (not installed) the /Applications location.
+    pub fn gaze_bin(&self) -> PathBuf {
+        if let Some(o) = &self.gaze_override {
+            return o.clone();
+        }
+        let bins: Vec<PathBuf> = Self::gaze_app_locations().into_iter().map(|a| a.join("Contents/MacOS/f1r3gaze")).collect();
+        bins.iter().find(|b| b.exists()).cloned().unwrap_or_else(|| bins[0].clone())
     }
 
     pub fn manifest(&self) -> PathBuf { self.state.join("shard.toml") }

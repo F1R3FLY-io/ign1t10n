@@ -23,6 +23,12 @@ sed -e "s/@VERSION@/$VERSION/" -e "s/@BUILD@/$(date +%Y%m%d%H%M)/" "$HERE/Info.p
 cp "$HERE/LaunchAgents/io.f1r3fly.ign1t10n.supervisor.plist" "$C/Library/LaunchAgents/"
 cp "$HERE/uninstall.sh" "$ROOT/versions.toml" "$ROOT/compat.toml" "$C/Resources/"
 [ -f "$HERE/ign1t10n.icns" ] && cp "$HERE/ign1t10n.icns" "$C/Resources/"
+# Carry F1R3Gaze.app too, so first launch can install it if it is missing
+# (app copied without the package, or F1R3Gaze deleted since).
+pkgutil --expand-full "$GAZE_PKG" "$WORK/gaze-expanded"
+GAZE_APP="$(find "$WORK/gaze-expanded" -maxdepth 4 -name F1R3Gaze.app -type d | head -1)"
+[ -n "$GAZE_APP" ] || { echo "no F1R3Gaze.app in $GAZE_PKG"; exit 1; }
+ditto "$GAZE_APP" "$C/Resources/F1R3Gaze.app"
 
 # Gates (spec §11.3): arm64 only, no dynamic OpenSSL, no development keys.
 for b in "$C/MacOS/ign1t10n" "$C/Helpers/f1r3node" "$C/Helpers/embers"; do
@@ -33,6 +39,7 @@ if grep -rqaE '04fa70d7be5eb750e0915c0f6d19e7085d18bb1c22d030feb2a877ca2cd226d04
   echo "a development key is in the bundle"; exit 1
 fi
 
+codesign --verify --deep --strict "$C/Resources/F1R3Gaze.app"
 # Sign inside out with the hardened runtime.
 SIGN="${SIGN_APP:--}"
 for b in "$C/Helpers/f1r3node" "$C/Helpers/embers" "$C/MacOS/ign1t10n"; do

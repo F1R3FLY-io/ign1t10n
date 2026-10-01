@@ -31,8 +31,19 @@ pub fn validator_base(slot: u8) -> u16 {
     if slot <= 4 { 40400 + 10 * slot as u16 } else { 40410 + 10 * slot as u16 }
 }
 
+/// Is `p` free on loopback? Binding alone is not enough on macOS: Rust sets
+/// SO_REUSEADDR, and BSD then lets 127.0.0.1:p be bound while another
+/// program (a Docker shard, say) listens on *:p, and connections to
+/// 127.0.0.1:p can reach that other program. So a port is free only if we
+/// can bind it *and* nothing answers a connection to it.
 pub fn port_free(p: u16) -> bool {
-    TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, p)).is_ok()
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    if TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, p)).is_err() {
+        return false;
+    }
+    let answers = |a: SocketAddr| TcpStream::connect_timeout(&a, Duration::from_millis(200)).is_ok();
+    !(answers(SocketAddr::from((Ipv4Addr::LOCALHOST, p))) || answers(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, p))))
 }
 
 pub fn block_free(b: Block, taken: &[u16]) -> bool {
@@ -79,6 +90,16 @@ mod tests {
         assert_eq!(bases, vec![40410, 40420, 40430, 40440, 40460, 40470, 40480, 40490, 40500, 40510]);
         assert!(!bases.contains(&OBSERVER_BASE));
         assert_eq!(Block(40410).http(), 40413);
+    }
+
+    #[test]
+    fn a_wildcard_listener_makes_a_port_taken() {
+        // Another program listening on all addresses (as Docker does).
+        let l = TcpListener::bind("0.0.0.0:0").unwrap();
+        let p = l.local_addr().unwrap().port();
+        assert!(!port_free(p));
+        drop(l);
+        assert!(port_free(p));
     }
 
     #[test]

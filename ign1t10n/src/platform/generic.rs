@@ -31,7 +31,7 @@ pub fn agent_enabled() -> Option<bool> {
 
 pub fn open_gaze() -> Result<(), String> {
     let p = crate::paths::Paths::from_env();
-    std::process::Command::new(&p.gaze_bin).arg("gaze://newtab").spawn().map(|_| ()).map_err(|e| e.to_string())
+    std::process::Command::new(p.gaze_bin()).arg("gaze://newtab").spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 pub fn reveal(path: &std::path::Path) {

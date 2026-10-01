@@ -48,6 +48,7 @@ impl Env {
             .env("IGN1T10N_DEV_SECRETS", "1")
             .env("IGN1T10N_QUIET", "1")
             .env("IGN1T10N_SKIP_RESOURCE_CHECK", "1")
+            .env("IGN1T10N_START_TIMEOUT_SECS", "45")
             .output()
             .unwrap();
         (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
@@ -93,7 +94,14 @@ fn pid_of(root: &Path, node: &str) -> Option<i32> {
 fn provision_run_resize_and_uninstall() {
     let e = Env::new();
     let (ok, out) = e.cmd(&["ctl", "provision", "--non-interactive"]);
-    assert!(ok, "provision failed:\n{out}");
+    let log = || {
+        let mut l = std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default();
+        for n in ["bootstrap", "validator-1", "validator-2", "observer"] {
+            l += &format!("\n--- {n}.stdout.log\n{}", std::fs::read_to_string(e.root.join(format!("logs/{n}.stdout.log"))).unwrap_or_default());
+        }
+        l
+    };
+    assert!(ok, "provision failed:\n{out}\n{}", log());
 
     let s = e.wait("running", 60, |s| state(s) == "running");
     assert_eq!(s["validators"], 2);

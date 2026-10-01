@@ -94,6 +94,14 @@ Not verified here:
 * **Bundling Embers** adds a funded service key per Embers network (both
   point at the local shard) and seven more secrets, kept in one Keychain item
   `embers.secrets`.
+* **ign1t10n carries F1R3Gaze.app** in `Contents/Resources` as well as
+  installing it through the package. S0 installs that copy (to
+  `/Applications`, else `~/Applications`) when F1R3Gaze is missing, so a
+  copied app or a deleted F1R3Gaze does not stop setup. For development,
+  `IGN1T10N_GAZE_BIN` names a `f1r3gaze` executable instead.
+* **Ports are free only if nothing answers.** On macOS, binding
+  `127.0.0.1:p` succeeds while another program (Docker) listens on `*:p`, so
+  `ports::port_free` also tries to connect.
 * **Before G1**, the F1R3Gaze wallet is found by parsing `f1r3gaze wallet list`
   (`* ADDRESS LABEL`) and created with `wallet new "Local shard"`.
 * **The release workflow's node build asks for `crypto/vendored-openssl`**,

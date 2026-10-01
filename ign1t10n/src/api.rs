@@ -6,11 +6,21 @@ use gaze_net::{Http, HttpRequest};
 use gaze_shard::deploy::SignedDeploy;
 use gaze_shard::node::Node;
 use serde_json::{Value, json};
+use std::io::Read;
+use std::time::Duration;
+
+/// Every node ign1t10n talks to is on loopback: a request that has not been
+/// answered in a few seconds will not be, and must not stall the supervisor.
+fn local_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(2)).timeout(Duration::from_secs(10)).redirects(0).build()
+}
 
 #[derive(Clone)]
 pub struct Api {
     pub base: String,
+    /// F1R3Gaze's client, for deploys (signing and submission as F1R3Gaze does).
     http: Http,
+    local: ureq::Agent,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -36,7 +46,7 @@ pub fn node_id_of(address: &str) -> Option<String> {
 
 impl Api {
     pub fn new(base: impl Into<String>) -> Api {
-        Api { base: base.into().trim_end_matches('/').to_string(), http: Http::new() }
+        Api { base: base.into().trim_end_matches('/').to_string(), http: Http::new(), local: local_agent() }
     }
 
     pub fn node(&self) -> Node {
@@ -44,12 +54,32 @@ impl Api {
     }
 
     fn get(&self, path: &str) -> Result<(u16, Value), String> {
-        let r = self
-            .http
-            .send(&HttpRequest { url: format!("{}{path}", self.base), method: "GET".into(), headers: vec![("accept".into(), "application/json".into())], body: vec![] })
-            .map_err(|e| format!("{}{path}: {e}", self.base))?;
-        let v = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
-        Ok((r.status, v))
+        let url = format!("{}{path}", self.base);
+        let r = match self.local.get(&url).set("accept", "application/json").call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => return Err(format!("{url}: {e}")),
+        };
+        let status = r.status();
+        let mut body = Vec::new();
+        r.into_reader().take(16 << 20).read_to_end(&mut body).map_err(|e| format!("{url}: {e}"))?;
+        Ok((status, serde_json::from_slice(&body).unwrap_or(Value::Null)))
+    }
+
+    /// `GET path` answered 200, or why not.
+    pub fn get_ok(&self, path: &str) -> Result<(), String> {
+        match self.get(path)? {
+            (200, _) => Ok(()),
+            (s, v) => Err(format!("HTTP {s} {v}")),
+        }
+    }
+
+    /// `GET /api/ready`, with the reason when it is not 200 (for the log).
+    pub fn ready_why(&self) -> Result<(), String> {
+        match self.get("/api/ready")? {
+            (200, _) => Ok(()),
+            (s, v) => Err(format!("HTTP {s} {v}")),
+        }
     }
 
     fn post(&self, path: &str, body: &Value) -> Result<(u16, Value), String> {
@@ -91,7 +121,7 @@ impl Api {
 
     /// `GET /api/ready`: 200 once the node can serve deploys.
     pub fn ready(&self) -> bool {
-        matches!(self.get("/api/ready"), Ok((200, _)))
+        self.ready_why().is_ok()
     }
 
     pub fn bond_status(&self, public_key: &str) -> Result<bool, String> {

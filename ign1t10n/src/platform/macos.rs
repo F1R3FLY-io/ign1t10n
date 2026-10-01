@@ -78,7 +78,7 @@ fn team_id(app: &str) -> Option<String> {
 /// The `.app` bundle containing the configured `f1r3gaze` executable
 /// (`.../F1R3Gaze.app/Contents/MacOS/f1r3gaze`), if it is inside one.
 fn gaze_bundle() -> Option<std::path::PathBuf> {
-    let bin = crate::paths::Paths::from_env().gaze_bin;
+    let bin = crate::paths::Paths::from_env().gaze_bin();
     let app = bin.ancestors().nth(3)?.to_path_buf();
     (app.extension().is_some_and(|e| e == "app") && bin.parent()?.ends_with("Contents/MacOS")).then_some(app)
 }
@@ -196,7 +196,13 @@ pub fn unregister_agent() -> Result<(), String> {
 // Launch Services, notifications, clipboard.
 
 pub fn open_gaze() -> Result<(), String> {
-    let st = Command::new("/usr/bin/open").args(["-b", crate::GAZE_BUNDLE_ID, "--args", "gaze://newtab"]).status().map_err(|e| e.to_string())?;
+    let by_id = Command::new("/usr/bin/open").args(["-b", crate::GAZE_BUNDLE_ID, "--args", "gaze://newtab"]).status().map(|s| s.success()).unwrap_or(false);
+    if by_id {
+        return Ok(());
+    }
+    // Just installed: Launch Services may not know the identifier yet.
+    let app = crate::paths::Paths::from_env().gaze_bin().ancestors().nth(3).map(|a| a.to_path_buf()).ok_or("F1R3Gaze is not installed")?;
+    let st = Command::new("/usr/bin/open").arg("-a").arg(&app).args(["--args", "gaze://newtab"]).status().map_err(|e| e.to_string())?;
     if st.success() { Ok(()) } else { Err("could not open F1R3Gaze".into()) }
 }
 

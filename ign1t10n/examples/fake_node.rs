@@ -90,6 +90,7 @@ fn main() {
             let _ = r.read_exact(&mut body);
             let body = String::from_utf8_lossy(&body).to_string();
             let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
+            eprintln!("{role}: {}", first.trim());
             let lfb = 1 + t0.elapsed().as_secs() as i64;
             let ready = t0.elapsed().as_millis() > 800;
             let (code, out) = match path.as_str() {
