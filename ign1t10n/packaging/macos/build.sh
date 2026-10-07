@@ -2,7 +2,11 @@
 # Assemble, sign, package and notarise ign1t10n (spec §11). Run on an
 # Apple-silicon macOS runner after the node, embers and gaze jobs.
 #
-#   build.sh VERSION NODE_BIN EMBERS_BIN GAZE
+#   build.sh VERSION NODE_BIN EMBERS_BIN GAZE [GAMES]
+#
+# GAMES is the directory make-games.sh produces (bin/f1r3games-service,
+# bin/f1r3games, res/): F1R3Games, spec v0.4. Without it the package carries
+# no F1R3Games and first run offers none.
 #
 # GAZE is F1R3Gaze as its packaging produces it (F1R3Gaze-<v>-macos-*.dmg),
 # a .pkg containing F1R3Gaze.app, or a F1R3Gaze.app directory.
@@ -15,8 +19,13 @@
 # (local testing only, until work package N2): the package then works only
 # on Macs with that Homebrew library.
 set -eu
-VERSION="$1"; NODE="$2"; EMBERS="$3"; GAZE_IN="$4"
-[ $# -eq 4 ] || { echo "usage: build.sh VERSION NODE_BIN EMBERS_BIN GAZE(.dmg|.pkg|.app)"; exit 1; }
+VERSION="$1"; NODE="$2"; EMBERS="$3"; GAZE_IN="$4"; GAMES="${5:-}"
+[ $# -eq 4 ] || [ $# -eq 5 ] || { echo "usage: build.sh VERSION NODE_BIN EMBERS_BIN GAZE(.dmg|.pkg|.app) [GAMES_DIR]"; exit 1; }
+if [ -n "$GAMES" ]; then
+  for f in bin/f1r3games-service bin/f1r3games res/games.toml res/portal/index.html; do
+    [ -e "$GAMES/$f" ] || { echo "$GAMES is not a make-games.sh output (no $f)"; exit 1; }
+  done
+fi
 [ -x "$NODE" ] || { echo "node binary not found or not executable: $NODE"; exit 1; }
 [ -x "$EMBERS" ] || { echo "embers binary not found or not executable: $EMBERS"; exit 1; }
 [ -e "$GAZE_IN" ] || { echo "F1R3Gaze not found: $GAZE_IN (make it with packaging/macos/make-gaze-app.sh, or pass /Applications/F1R3Gaze.app)"; exit 1; }
@@ -30,6 +39,12 @@ cargo build --release --locked --target aarch64-apple-darwin --manifest-path "$R
 cp "$ROOT/target/aarch64-apple-darwin/release/ign1t10n" "$C/MacOS/ign1t10n"
 cp "$NODE" "$C/Helpers/f1r3node"
 cp "$EMBERS" "$C/Helpers/embers"
+HELPERS="$C/Helpers/f1r3node $C/Helpers/embers"
+if [ -n "$GAMES" ]; then
+  cp "$GAMES/bin/f1r3games-service" "$GAMES/bin/f1r3games" "$C/Helpers/"
+  ditto "$GAMES/res" "$C/Resources/f1r3games"
+  HELPERS="$HELPERS $C/Helpers/f1r3games-service $C/Helpers/f1r3games"
+fi
 sed -e "s/@VERSION@/$VERSION/" -e "s/@BUILD@/$(date +%Y%m%d%H%M)/" "$HERE/Info.plist" > "$C/Info.plist"
 cp "$HERE/LaunchAgents/io.f1r3fly.ign1t10n.supervisor.plist" "$C/Library/LaunchAgents/"
 cp "$HERE/uninstall.sh" "$ROOT/versions.toml" "$ROOT/compat.toml" "$C/Resources/"
@@ -63,7 +78,7 @@ ditto "$GAZE_APP" "$C/Resources/F1R3Gaze.app"
 
 # Gates (spec §11.3): arm64 only, no dynamic OpenSSL, no development keys.
 LOCAL_LIBS=""
-for b in "$C/MacOS/ign1t10n" "$C/Helpers/f1r3node" "$C/Helpers/embers"; do
+for b in "$C/MacOS/ign1t10n" $HELPERS; do
   lipo -archs "$b" | grep -qx arm64 || { echo "$b is not arm64-only"; exit 1; }
   if otool -L "$b" | grep -Eiq 'libssl|libcrypto|/opt/homebrew|/usr/local'; then
     echo "$b links a non-system library:"; otool -L "$b" | grep -Ei 'libssl|libcrypto|/opt/homebrew|/usr/local'
@@ -76,7 +91,9 @@ done
 # No development *private* key (node repo docker/.env.example) may ship.
 # (Development public keys are expected: ign1t10n carries them to refuse them.)
 DEV_PRIVATE='5f668a7ee96d944a4494cc947e4005e172d7ab3461ee5538f1f2a45a835e9657|357cdc4201a5650830e0bc5a03299a30038d9934ba4c7ab73ec164ad82471ff9|2c02138097d019d263c1d5383fcaddb1ba6416a0f4e64e3a617fe3af45b7851d|b67533f1f99c0ecaedb7d829e430b1c0e605bda10f339f65d5567cb5bd77cbcb|5ff3514bf79a7d18e8dd974c699678ba63b7762ce8d78c532346e52f0ad219cd'
-LEAKS="$(grep -rlaE "$DEV_PRIVATE" "$APP" || true)"
+# Nor any key committed in F1R3Games' examples/local-shard (upper-case hex there).
+DEV_PRIVATE="$DEV_PRIVATE|2168212FF2D7B9B998D57D4B2D355D0D4628172F3C339E54FEC7A4935954F43D|3E25D094FF00B9743975EE6A8F491AECFDA4197D6B678D5ED4D4802D73311729|4471A6DCBC0AE432F5E230E1EBCDC805B0A5C1A770066AD95C2D7F14A9FBF5EA|48AA68D103B45987CBE088313DE77599DFA865A07CF750076D56E6FB0652C8D7|4E0CAA276C16EE2D5C80FFAFD2DBEDA08151CB876AFD807463BD9BFD36EEC3E6|4FACDD3593B8729D60BA3DF2F4926028BE10E8F9BC1004CE35AE9A5CA21D0B16|62FEB32CC6096009CCC00F2ABF743E48159F09EBE7947FF930993F952CE163E7|69097666896F7AFB95A5F9DE95823ED12482E3A72F14213BA2CA22B2BCBF6848|90F0CD0F2A0096997BD5906DE31D37E665624B0B8A2D543E44DF9837D1141B05|97D876B2EFDD32959F666102D96517CC2EF949D47122A4623BCE56A90C0F6D58|BA11C03198F3DF96316AFE0A656FC8ADEF8757F179003033A0215B8BF0D8A3FB|CD0FF183F942C93AFBCF2957FDD3995F4AB680A5B20B4223DF7E14AB971609A7|DE9FCE2B4F6395F68F37F91321C4B54DE7E3672A98FEC2417973DB1F9BB6AF45|E922E7E3DF03BA42008218816090A1227B526C2FCBD0E86663A791EFB8A033E2|EC064A97D17FCA688391F630A0B5760F3F1CF418C288F2070C0E17572B9ED120|15cd4dda2d92c158fde334cb6e86fd837e3d2644e747e5c4d84ae364f0e7905d"
+LEAKS="$(grep -rlaiE "$DEV_PRIVATE" "$APP" || true)"
 if [ -n "$LEAKS" ]; then
   echo "a development private key is in the bundle, in:"; echo "$LEAKS"
   if [ "${ALLOW_DEV_KEYS:-}" = 1 ] && [ -z "${SIGN_APP:-}" ]; then echo "warning: allowed for a local test build" >&2; else exit 1; fi
@@ -97,7 +114,7 @@ no_relocation() {
 SIGN="${SIGN_APP:--}"
 # Secure timestamps need a real identity; ad-hoc signatures cannot have one.
 TS="--timestamp"; [ "$SIGN" = "-" ] && TS="--timestamp=none"
-for b in "$C/Helpers/f1r3node" "$C/Helpers/embers" "$C/MacOS/ign1t10n"; do
+for b in $HELPERS "$C/MacOS/ign1t10n"; do
   ENT="$HERE/entitlements.plist"
   case " $LOCAL_LIBS " in *" $b "*) ENT="$HERE/entitlements-local-libs.plist" ;; esac
   codesign --force --options runtime $TS --entitlements "$ENT" -s "$SIGN" "$b"

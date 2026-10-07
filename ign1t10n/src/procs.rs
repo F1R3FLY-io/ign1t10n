@@ -16,6 +16,8 @@ pub enum Role {
     Validator(u8),
     Observer,
     Embers,
+    /// The F1R3Games portal (`f1r3games-service serve`), spec v0.4 §10.
+    Portal,
 }
 
 impl Role {
@@ -25,6 +27,7 @@ impl Role {
             Role::Validator(k) => crate::nodeconf::validator_name(*k),
             Role::Observer => "observer".into(),
             Role::Embers => "embers".into(),
+            Role::Portal => "portal".into(),
         }
     }
     pub fn parse(s: &str) -> Option<Role> {
@@ -32,6 +35,7 @@ impl Role {
             "bootstrap" => Some(Role::Bootstrap),
             "observer" => Some(Role::Observer),
             "embers" => Some(Role::Embers),
+            "portal" => Some(Role::Portal),
             _ => s.strip_prefix("validator-").and_then(|k| k.parse().ok()).map(Role::Validator),
         }
     }
@@ -67,7 +71,7 @@ pub fn node_args(p: &Paths, m: &Manifest, role: &Role) -> Result<Vec<String>, St
             a.extend(["--bootstrap".into(), bootstrap_address(m).ok_or("bootstrap node id unknown")?]);
             a.push("--heartbeat-disabled".into());
         }
-        Role::Embers => return Err("embers is not a node".into()),
+        Role::Embers | Role::Portal => return Err(format!("{} is not a node", role.name())),
     }
     // Ports on the command line: the node's port options have default values
     // (40400, 40403, ...), and a default counts as given, so it overrides the
@@ -76,7 +80,7 @@ pub fn node_args(p: &Paths, m: &Manifest, role: &Role) -> Result<Vec<String>, St
         Role::Bootstrap => m.bootstrap.base_port,
         Role::Observer => m.observer.base_port,
         Role::Validator(k) => m.validator(*k).ok_or_else(|| format!("no validator {k}"))?.base_port,
-        Role::Embers => unreachable!(),
+        Role::Embers | Role::Portal => unreachable!(),
     };
     let b = crate::ports::Block(base);
     for (flag, port) in [

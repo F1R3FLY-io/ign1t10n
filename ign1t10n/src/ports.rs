@@ -7,6 +7,10 @@ use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 pub const BOOTSTRAP_BASE: u16 = 40400;
 pub const OBSERVER_BASE: u16 = 40450;
 pub const EMBERS_PORT: u16 = 40600;
+/// F1R3Games (spec v0.4 §10.2): the portal at 40700, each game at
+/// 40701, 40702, ... in a decade of its own (Decision 9).
+pub const GAMES_BASE: u16 = 40700;
+const GAMES_FALLBACK_START: u16 = 41700;
 const FALLBACK_START: u16 = 41400;
 const FALLBACK_END: u16 = 49990;
 
@@ -44,6 +48,31 @@ pub fn port_free(p: u16) -> bool {
     }
     let answers = |a: SocketAddr| TcpStream::connect_timeout(&a, Duration::from_millis(200)).is_ok();
     !(answers(SocketAddr::from((Ipv4Addr::LOCALHOST, p))) || answers(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, p))))
+}
+
+/// Can this Mac bind the IPv6 loopback address at all?
+pub fn ipv6_loopback() -> bool {
+    std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_ok()
+}
+
+/// Free on both loopback families: a browser asked for `localhost` tries
+/// ::1 as well as 127.0.0.1, so a program holding either would answer some
+/// of its requests (spec v0.4, Finding "localhost has two addresses").
+pub fn port_free_dual(p: u16, ipv6: bool) -> bool {
+    if !port_free(p) {
+        return false;
+    }
+    !ipv6 || std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, p)).is_ok()
+}
+
+/// A decade for the portal and `games` game origins: the plan's 40700 if
+/// all its ports are free, else the first free decade from 41700.
+pub fn allocate_games(games: usize, taken: &[u16], ipv6: bool) -> Option<u16> {
+    let ok = |base: u16| (0..=games as u16).all(|i| !taken.contains(&(base + i)) && port_free_dual(base + i, ipv6));
+    if ok(GAMES_BASE) {
+        return Some(GAMES_BASE);
+    }
+    (GAMES_FALLBACK_START..=FALLBACK_END).step_by(10).find(|b| ok(*b))
 }
 
 pub fn block_free(b: Block, taken: &[u16]) -> bool {
@@ -100,6 +129,21 @@ mod tests {
         assert!(!port_free(p));
         drop(l);
         assert!(port_free(p));
+    }
+
+    #[test]
+    fn a_games_decade_avoids_taken_ports_on_either_family() {
+        let v6 = ipv6_loopback();
+        let base = allocate_games(2, &[], v6).unwrap();
+        assert_eq!(base % 10, 0);
+        let again = allocate_games(2, &[base, base + 1, base + 2], v6).unwrap();
+        assert_ne!(again, base);
+        if v6 {
+            // A decoy on ::1 alone makes the port taken.
+            let l = std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).unwrap();
+            let p = l.local_addr().unwrap().port();
+            assert!(!port_free_dual(p, true));
+        }
     }
 
     #[test]

@@ -287,6 +287,12 @@ pub fn open_gaze() -> Result<(), String> {
     if st.success() { Ok(()) } else { Err("could not open F1R3Gaze".into()) }
 }
 
+/// Open a URL in the person's default browser (the F1R3Games portal).
+pub fn open_url(url: &str) -> Result<(), String> {
+    let st = Command::new("/usr/bin/open").arg(url).status().map_err(|e| e.to_string())?;
+    if st.success() { Ok(()) } else { Err(format!("could not open {url}")) }
+}
+
 pub fn reveal(path: &std::path::Path) {
     let _ = Command::new("/usr/bin/open").arg(path).spawn();
 }

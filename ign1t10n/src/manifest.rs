@@ -1,4 +1,5 @@
-//! `shard.toml`, the manifest (spec Appendix B, schema 3). It records the
+//! `shard.toml`, the manifest (spec Appendix B, schema 4; schema 3 reads as
+//! F1R3Games never installed). It records the
 //! shard's identity, every node's key and ports, each validator slot's
 //! lifecycle state, the options chosen at installation, and the progress of
 //! provisioning and of any resize, so that every operation resumes after an
@@ -7,7 +8,7 @@
 use crate::paths::{Paths, write_atomic};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Manifest {
@@ -20,6 +21,10 @@ pub struct Manifest {
     pub wallet: Wallet,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embers: Option<Embers>,
+    /// F1R3Games (spec v0.4 §10): the portal, its origins, keys' addresses,
+    /// environments and registrations, and the progress of G1..G7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub games: Option<Games>,
     #[serde(default)]
     pub validators: Vec<Validator>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,11 +60,124 @@ pub struct Options {
     pub deploy_target: DeployTarget,
     /// The timing profile rendered into `common.conf` (Decision 6).
     pub timing: String,
+    /// Install and run F1R3Games (spec v0.4, Decision 17; default on for new
+    /// installs, absent and so off in a schema-3 manifest).
+    #[serde(default)]
+    pub games: bool,
+    /// Open the portal in the default browser when first run finishes (Decision 13).
+    #[serde(default)]
+    pub games_open_at_first_run: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { embers: true, gaze_integration: true, deploy_target: DeployTarget::Random, timing: crate::nodeconf::TIMING_PROFILE.into() }
+        Options { embers: true, gaze_integration: true, deploy_target: DeployTarget::Random, timing: crate::nodeconf::TIMING_PROFILE.into(), games: true, games_open_at_first_run: true }
+    }
+}
+
+/// F1R3Games on the local shard.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Games {
+    /// The F1R3Games revision last installed (from the bundle's games.toml).
+    #[serde(default)]
+    pub revision: String,
+    /// The portal's port: its origin is `http://localhost:<port>` for the
+    /// life of the install (Principle "Stable origins").
+    pub portal_port: u16,
+    /// Also listen on ::1 (both loopback families) when this Mac has IPv6 loopback.
+    #[serde(default)]
+    pub ipv6: bool,
+    /// The validator slot the portal deploys to, drawn at each start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validator_slot: Option<u8>,
+    #[serde(default)]
+    pub service_address: String,
+    #[serde(default)]
+    pub coop_address: String,
+    #[serde(default)]
+    pub breeder_address: String,
+    /// The portal environment's URI (fixed by its key) and registered version.
+    #[serde(default)]
+    pub env_uri: String,
+    #[serde(default)]
+    pub env_version: i64,
+    /// Faucet amount per new portal key, in whole F1R3 (Decision 14).
+    pub faucet_f1r3: i64,
+    /// Run the F1R3Beat breeder daily (Decision 15).
+    #[serde(default)]
+    pub breeder: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nursery: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_epoch: Option<String>,
+    #[serde(default, rename = "game")]
+    pub game: Vec<Game>,
+    #[serde(default)]
+    pub stages: GamesStages,
+    /// An update the bundle brings that discards on-chain state, waiting for consent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_update: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Game {
+    pub id: String,
+    /// The game's own origin's port, when its client is bundled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub env_uri: String,
+    #[serde(default)]
+    pub env_version: i64,
+    #[serde(default)]
+    pub client: bool,
+    #[serde(default)]
+    pub registered: bool,
+    /// SHA-256 of the manifest last registered (entry and template hashes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+}
+
+/// G1..G7 (spec v0.4 §10.4). From `funded` on they are cleared at reset.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct GamesStages {
+    #[serde(default)] pub secrets: bool,
+    #[serde(default)] pub ports: bool,
+    #[serde(default)] pub funded: bool,
+    #[serde(default)] pub portal_env: bool,
+    #[serde(default)] pub game_envs: bool,
+    #[serde(default)] pub registered: bool,
+    #[serde(default)] pub opened: bool,
+}
+
+impl GamesStages {
+    pub fn installed(&self) -> bool {
+        self.secrets && self.ports && self.funded && self.portal_env && self.game_envs && self.registered
+    }
+    /// What survives a new chain: the keys and the origins.
+    pub fn after_reset(&self) -> GamesStages {
+        GamesStages { secrets: self.secrets, ports: self.ports, opened: self.opened, ..Default::default() }
+    }
+}
+
+impl Games {
+    pub fn game(&self, id: &str) -> Option<&Game> {
+        self.game.iter().find(|g| g.id == id)
+    }
+    pub fn game_mut(&mut self, id: &str) -> Option<&mut Game> {
+        self.game.iter_mut().find(|g| g.id == id)
+    }
+    /// The portal's origin.
+    pub fn url(&self) -> String {
+        format!("http://localhost:{}", self.portal_port)
+    }
+    /// Every port the portal process listens on.
+    pub fn ports(&self) -> Vec<u16> {
+        std::iter::once(self.portal_port).chain(self.game.iter().filter_map(|g| g.port)).filter(|p| *p != 0).collect()
+    }
+    /// The games whose clients are served (and so registered).
+    pub fn served(&self) -> Vec<&Game> {
+        self.game.iter().filter(|g| g.client && g.port.is_some()).collect()
     }
 }
 
@@ -198,6 +316,8 @@ pub struct Stages {
     #[serde(default)] pub genesis: bool,
     #[serde(default)] pub gaze: bool,
     #[serde(default)] pub opened: bool,
+    /// F1R3Games installed (or not chosen), and the portal opened (G7).
+    #[serde(default)] pub games: bool,
 }
 
 impl Stages {
@@ -260,6 +380,9 @@ impl Manifest {
         if let Some(e) = &self.embers {
             t.push(e.port);
         }
+        if let Some(g) = &self.games {
+            t.extend(g.ports());
+        }
         t
     }
     pub fn free_slot(&self) -> Option<u8> {
@@ -281,6 +404,7 @@ pub mod tests_support {
             faucet: Account { public_key: "04f".into(), address: "1111f".into() },
             wallet: Wallet { funded: Some("1111w".into()), gaze_validators: vec![] },
             embers: None,
+            games: None,
             validators: (1..=2)
                 .map(|s| Validator { slot: s, public_key: format!("04{s}"), address: format!("1111{s}"), base_port: crate::ports::validator_base(s), state: SlotState::Active, genesis: true, deploy: None, balance_before_payout: None })
                 .collect(),
@@ -305,5 +429,35 @@ mod tests {
         assert_eq!(back, m);
         assert_eq!(m.n(), 2);
         assert_eq!(m.free_slot(), Some(3));
+    }
+
+    #[test]
+    fn a_schema_3_manifest_reads_as_games_never_installed() {
+        let m = sample();
+        let mut t = toml::to_string_pretty(&m).unwrap().replace("schema = 4", "schema = 3");
+        t = t.lines().filter(|l| !l.starts_with("games") ).collect::<Vec<_>>().join("\n");
+        let back: Manifest = toml::from_str(&t).unwrap();
+        assert!(!back.options.games && back.games.is_none());
+    }
+
+    #[test]
+    fn games_round_trip_and_reserve_their_ports() {
+        let mut m = sample();
+        m.games = Some(Games {
+            portal_port: 40700,
+            faucet_f1r3: 100,
+            game: vec![
+                Game { id: "f1r3pix".into(), port: Some(40701), client: true, ..Default::default() },
+                Game { id: "f1r3ink".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        });
+        let back: Manifest = toml::from_str(&toml::to_string_pretty(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        let g = back.games.unwrap();
+        assert_eq!(g.ports(), vec![40700, 40701]);
+        assert_eq!(g.served().len(), 1);
+        assert_eq!(g.url(), "http://localhost:40700");
+        assert!(m.taken_ports().contains(&40701));
     }
 }

@@ -56,8 +56,27 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: gaze, path: gaze/*.dmg }
 
+  games:
+    # F1R3Games at the pinned revision: the service and CLI, the portal shell
+    # and the listed game clients (spec v0.4 §15).
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: python3 -c "import tomllib;print('rev='+tomllib.load(open('versions.toml','rb'))['f1r3games']['revision'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with: { repository: F1R3FLY-io/F1R3Games, ref: "${{ steps.v.outputs.rev }}", path: f1r3games }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cargo test --locked --manifest-path f1r3games/Portal/f1r3games-portal/Cargo.toml
+      - run: packaging/macos/make-games.sh f1r3games games-out
+      - uses: actions/upload-artifact@v4
+        with: { name: games, path: games-out }
+
   assemble:
-    needs: [node, embers, gaze]
+    needs: [node, embers, gaze, games]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -80,8 +99,8 @@ jobs:
       - name: Notary profile
         if: ${{ secrets.NOTARY_APPLE_ID != '' }}
         run: xcrun notarytool store-credentials ign1t10n --apple-id "${{ secrets.NOTARY_APPLE_ID }}" --team-id "${{ secrets.TEAM_ID }}" --password "${{ secrets.NOTARY_PASSWORD }}"
-      - run: chmod +x in/f1r3node/node in/embers/embers
-      - run: packaging/macos/build.sh "${GITHUB_REF_NAME#v}" in/f1r3node/node in/embers/embers "$(ls in/gaze/*.dmg | head -1)"
+      - run: chmod +x in/f1r3node/node in/embers/embers in/games/bin/*
+      - run: packaging/macos/build.sh "${GITHUB_REF_NAME#v}" in/f1r3node/node in/embers/embers "$(ls in/gaze/*.dmg | head -1)" in/games
         env:
           SIGN_APP: ${{ secrets.SIGN_APP }}
           SIGN_PKG: ${{ secrets.SIGN_PKG }}
@@ -107,7 +126,15 @@ jobs:
           $B ctl status
           $B ctl resize 3; until $B ctl status --json | grep -q '"validators": 3' && ! $B ctl status --json | grep -q '"resize"'; do sleep 10; done
           $B ctl resize 2; until $B ctl status --json | grep -q '"validators": 2' && ! $B ctl status --json | grep -q '"resize"'; do sleep 10; done
-          lsof -nP -iTCP -sTCP:LISTEN | grep -E 'f1r3node|embers' || true
+          lsof -nP -iTCP -sTCP:LISTEN | grep -E 'f1r3node|embers|f1r3games' || true
+          # F1R3Games (A15, A17, A23): installed, registered, served at localhost only.
+          $B ctl games status
+          U=$($B ctl games env | sed -n 's/^F1R3GAMES_SERVICE=//p')
+          curl -fsS "$U/api/ready?games=f1r3pix,f1r3beat"
+          curl -fsS "$U/" | grep -qi '<html'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$U/api/health")" = 421
+          ! lsof -nP -iTCP -sTCP:LISTEN -c f1r3games | grep -vE '127\.0\.0\.1:|\[::1\]:|COMMAND'
+          $B ctl games env
           $B ctl status --json | tee status.json
           ! grep -q '"exposed"' status.json || echo "::warning::sockets listen off loopback (N1 not in this node)"
       - if: always()

@@ -18,11 +18,15 @@ pub struct Choices {
     pub validators: u8,
     pub embers: bool,
     pub gaze_integration: bool,
+    /// Install F1R3Games (Decision 17: default on).
+    pub games: bool,
+    /// Open the portal in the default browser when it is ready (Decision 13).
+    pub games_open: bool,
 }
 
 impl Default for Choices {
     fn default() -> Self {
-        Choices { validators: crate::DEFAULT_VALIDATORS, embers: true, gaze_integration: true }
+        Choices { validators: crate::DEFAULT_VALIDATORS, embers: true, gaze_integration: true, games: true, games_open: true }
     }
 }
 
@@ -38,10 +42,12 @@ pub enum Stage {
     Genesis,
     Gaze,
     Opened,
+    /// G1..G6 run by the supervisor; then G7, opening the portal.
+    Games,
 }
 
 impl Stage {
-    pub const ALL: [Stage; 10] = [Stage::Preflight, Stage::Ports, Stage::Wallet, Stage::Keys, Stage::GenesisFiles, Stage::Configs, Stage::Agent, Stage::Genesis, Stage::Gaze, Stage::Opened];
+    pub const ALL: [Stage; 11] = [Stage::Preflight, Stage::Ports, Stage::Wallet, Stage::Keys, Stage::GenesisFiles, Stage::Configs, Stage::Agent, Stage::Genesis, Stage::Gaze, Stage::Opened, Stage::Games];
     pub fn title(self) -> &'static str {
         match self {
             Stage::Preflight => "Checking this Mac",
@@ -54,6 +60,7 @@ impl Stage {
             Stage::Genesis => "Starting the shard (genesis)",
             Stage::Gaze => "Pointing F1R3Gaze at the shard",
             Stage::Opened => "Opening F1R3Gaze",
+            Stage::Games => "Installing F1R3Games",
         }
     }
     fn done(self, s: &Stages) -> bool {
@@ -68,6 +75,7 @@ impl Stage {
             Stage::Genesis => s.genesis,
             Stage::Gaze => s.gaze,
             Stage::Opened => s.opened,
+            Stage::Games => s.games,
         }
     }
     fn mark(self, s: &mut Stages) {
@@ -82,6 +90,7 @@ impl Stage {
             Stage::Genesis => &mut s.genesis,
             Stage::Gaze => &mut s.gaze,
             Stage::Opened => &mut s.opened,
+            Stage::Games => &mut s.games,
         };
         *f = true;
     }
@@ -130,8 +139,15 @@ pub const NODE_MEMORY_BYTES: u64 = 700 * 1024 * 1024;
 pub const NODE_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const EMBERS_MEMORY_BYTES: u64 = 150 * 1024 * 1024;
 
+/// PROVISIONAL, as the node figures: the portal service (T1 measures it).
+pub const PORTAL_MEMORY_BYTES: u64 = 150 * 1024 * 1024;
+
 pub fn memory_needed(validators: u8, embers: bool) -> u64 {
     (validators as u64 + 2) * NODE_MEMORY_BYTES + if embers { EMBERS_MEMORY_BYTES } else { 0 }
+}
+
+pub fn memory_needed_with(validators: u8, embers: bool, games: bool) -> u64 {
+    memory_needed(validators, embers) + if games { PORTAL_MEMORY_BYTES } else { 0 }
 }
 pub fn disk_needed(validators: u8) -> u64 {
     (validators as u64 + 2) * NODE_DISK_BYTES + 2 * 1024 * 1024 * 1024
@@ -141,12 +157,13 @@ fn skeleton(c: &Choices) -> Manifest {
     Manifest {
         schema: SCHEMA,
         shard: Shard { id: crate::SHARD_ID.into(), network_id: format!("ign1t10n-{}", hex::encode(crate::random_bytes::<4>())), genesis_validators: c.validators, created: crate::now_rfc3339(), ..Default::default() },
-        options: Options { embers: c.embers, gaze_integration: c.gaze_integration, ..Options::default() },
+        options: Options { embers: c.embers, gaze_integration: c.gaze_integration, games: c.games, games_open_at_first_run: c.games_open, ..Options::default() },
         bootstrap: Keyed::default(),
         observer: Observer::default(),
         faucet: Account::default(),
         wallet: Wallet::default(),
         embers: None,
+        games: None,
         validators: vec![],
         resize: None,
         stages: Stages::default(),
@@ -164,6 +181,9 @@ fn preflight(p: &Paths, m: &Manifest) -> Result<(), String> {
     if !p.node_bin.exists() {
         return Err(format!("the node binary is missing ({})", p.node_bin.display()));
     }
+    if m.options.games {
+        crate::games::bundle(p).map_err(|e| format!("F1R3Games was chosen but {e}"))?;
+    }
     let n = m.shard.genesis_validators;
     p.ensure().map_err(|e| format!("cannot create {}: {e}", p.state.display()))?;
     // Test harnesses only; the menu bar never sets it.
@@ -174,8 +194,9 @@ fn preflight(p: &Paths, m: &Manifest) -> Result<(), String> {
         }
     }
     if let Some(mem) = crate::platform::physical_memory().filter(|_| !skip) {
-        if mem < memory_needed(n, m.options.embers) {
-            return Err(format!("{} GB of memory; {n} validators need at least {} GB", mem >> 30, (memory_needed(n, m.options.embers) + (1 << 30) - 1) >> 30));
+        let need = memory_needed_with(n, m.options.embers, m.options.games);
+        if mem < need {
+            return Err(format!("{} GB of memory; {n} validators need at least {} GB", mem >> 30, (need + (1 << 30) - 1) >> 30));
         }
     }
     Ok(())
@@ -209,7 +230,8 @@ pub fn ensure_gaze(p: &Paths) -> Result<(), String> {
 }
 
 fn allocate_ports(m: &mut Manifest) -> Result<(), String> {
-    let mut taken = vec![];
+    // F1R3Games' origins (carried across a reset) are never given to a node.
+    let mut taken: Vec<u16> = m.games.as_ref().map(|g| g.ports()).unwrap_or_default();
     let take = |pref: u16, taken: &mut Vec<u16>| -> Result<u16, String> {
         let b = ports::allocate(pref, taken).ok_or("no free ports on 127.0.0.1")?;
         taken.extend(b.all());
@@ -320,6 +342,35 @@ fn await_genesis(p: &Paths, progress: &dyn Progress) -> Result<(), String> {
     }
 }
 
+/// Wait for the supervisor to finish F1R3Games' stages; the portal's URL.
+fn await_games(p: &Paths, progress: &dyn Progress) -> Result<String, String> {
+    use crate::control::GamesState;
+    let t0 = Instant::now();
+    let mut last = String::new();
+    let cap = std::env::var("IGN1T10N_START_TIMEOUT_SECS").ok().and_then(|v| v.parse::<u64>().ok()).map(|c| 6 * c).unwrap_or(1800);
+    loop {
+        if let Ok(r) = control::call(p, &Request::Status, Duration::from_secs(10)) {
+            if let Some(g) = r.status.and_then(|s| s.games) {
+                match &g.state {
+                    GamesState::Running | GamesState::Degraded(_) => return Ok(g.url),
+                    GamesState::Failed(e) => return Err(e.clone()),
+                    s => {
+                        let l = s.label();
+                        if l != last {
+                            progress.update(Stage::Games, StageStatus::Running(format!("{l} ({}s)", t0.elapsed().as_secs())));
+                            last = l;
+                        }
+                    }
+                }
+            }
+        }
+        if t0.elapsed() > Duration::from_secs(cap) {
+            return Err(format!("F1R3Games was not ready within {cap} seconds"));
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
 pub struct Run<'a> {
     pub paths: &'a Paths,
     pub secrets: &'a dyn Secrets,
@@ -396,6 +447,17 @@ pub fn provision(r: &Run) -> Result<Manifest, String> {
                     }
                     Ok(())
                 }
+                Stage::Games => {
+                    m = Manifest::load(p)?.ok_or("shard.toml disappeared")?;
+                    if !m.options.games {
+                        return Ok(());
+                    }
+                    let url = await_games(p, r.progress)?;
+                    if (!r.headless || r.open) && m.options.games_open_at_first_run {
+                        crate::platform::open_url(&format!("{url}/"))?;
+                    }
+                    Ok(())
+                }
             }
         })();
         match res {
@@ -405,6 +467,14 @@ pub fn provision(r: &Run) -> Result<Manifest, String> {
                     m.bootstrap.node_id = disk.bootstrap.node_id.or(m.bootstrap.node_id.take());
                     m.shard.genesis_hash = disk.shard.genesis_hash.or(m.shard.genesis_hash.take());
                     m.stages.genesis |= disk.stages.genesis;
+                    // F1R3Games' section is the supervisor's, written while
+                    // these stages run; never overwrite it with an older copy.
+                    m.games = disk.games;
+                }
+                if stage == Stage::Games {
+                    if let Some(g) = m.games.as_mut() {
+                        g.stages.opened = true;
+                    }
                 }
                 stage.mark(&mut m.stages);
                 m.save(p)?;
@@ -423,15 +493,18 @@ pub fn provision(r: &Run) -> Result<Manifest, String> {
 /// old one was archived (reset, "Start a new shard with M validators",
 /// incompatible upgrade). The supervisor then performs the genesis start.
 pub fn reprovision(p: &Paths, s: &dyn Secrets, old: &Manifest, n0: u8) -> Result<Manifest, String> {
-    let c = Choices { validators: n0, embers: old.options.embers, gaze_integration: old.options.gaze_integration };
+    let c = Choices { validators: n0, embers: old.options.embers, gaze_integration: old.options.gaze_integration, games: old.options.games, games_open: old.options.games_open_at_first_run };
     let mut m = skeleton(&c);
     m.options = old.options.clone();
     m.wallet.funded = old.wallet.funded.clone();
+    // F1R3Games keeps its keys and origins (Principle "Keys outlive chains");
+    // everything on the old chain is gone, so G3..G6 run again.
+    m.games = old.games.as_ref().map(crate::games::after_reset);
     allocate_ports(&mut m)?;
     keys(p, s, &mut m)?;
     crate::genesis::write(p, &m)?;
     nodeconf::write_all(p, &m)?;
-    m.stages = Stages { preflight: true, ports: true, wallet: true, keys: true, genesis_files: true, configs: true, agent: true, genesis: false, gaze: old.stages.gaze, opened: true };
+    m.stages = Stages { preflight: true, ports: true, wallet: true, keys: true, genesis_files: true, configs: true, agent: true, genesis: false, gaze: old.stages.gaze, opened: true, games: true };
     m.save(p)?;
     Ok(m)
 }

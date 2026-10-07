@@ -1,12 +1,15 @@
-//! `ign1t10n supervise`: the launch agent's program (spec §7). It owns every
-//! node process: ordered start (bootstrap, validators, observer, Embers),
-//! the genesis ceremony, health, restarts with back-off, ordered stop,
-//! resizes, and the control socket.
+//! `ign1t10n supervise`: the launch agent's program (spec §8). It owns every
+//! process: ordered start (bootstrap, validators, observer, Embers, the
+//! F1R3Games portal), the genesis ceremony, F1R3Games' stages G1..G7
+//! (`games_sup`), health, restarts with back-off, ordered stop, resizes, and
+//! the control socket.
+
+mod games_sup;
 
 use crate::admin;
 use crate::amounts::*;
 use crate::api::Api;
-use crate::control::{self, NodeReport, Report, Request, Response, ShardState};
+use crate::control::{self, GamesState, NodeReport, Report, Request, Response, ShardState};
 use crate::keys::Key;
 use crate::manifest::{Manifest, SlotState, Validator};
 use crate::paths::Paths;
@@ -55,6 +58,12 @@ struct Inner {
     resize_msg: Option<String>,
     exposed: Vec<String>,
     shutdown: bool,
+    /// F1R3Games' state, beside the shard's.
+    games: GamesState,
+    /// A G-stage, update, move or breeder run is in progress.
+    games_busy: bool,
+    /// When the breeder last ran (or was last tried).
+    breeder_at: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -113,8 +122,8 @@ impl Supervisor {
         crate::logging::init(&self.paths.log_file("ign1t10n"));
         info!("supervisor {} starting (pid {})", env!("CARGO_PKG_VERSION"), std::process::id());
         unsafe {
-            libc::signal(libc::SIGTERM, on_term as libc::sighandler_t);
-            libc::signal(libc::SIGINT, on_term as libc::sighandler_t);
+            libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t);
+            libc::signal(libc::SIGINT, on_term as *const () as libc::sighandler_t);
         }
         let _ = std::fs::write(self.paths.pidfile(), std::process::id().to_string());
         self.reload()?;
@@ -141,6 +150,7 @@ impl Supervisor {
             if last_audit.elapsed() >= Duration::from_secs(60) {
                 last_audit = Instant::now();
                 self.audit_loopback();
+                self.breeder_tick();
             }
             std::thread::sleep(Duration::from_millis(500));
         }
@@ -189,7 +199,7 @@ impl Supervisor {
             Role::Bootstrap => m.bootstrap.base_port,
             Role::Observer => m.observer.base_port,
             Role::Validator(k) => m.validator(*k).ok_or("no such validator")?.base_port,
-            Role::Embers => return Err("embers".into()),
+            Role::Embers | Role::Portal => return Err(format!("{} is not a node", role.name())),
         };
         Ok(Api::new(Block(base).http_url()))
     }
@@ -204,6 +214,10 @@ impl Supervisor {
             let e = crate::embers::load_or_create(&*self.secrets)?;
             let slot = m.embers.as_ref().and_then(|x| x.validator_slot).ok_or("embers has no validator")?;
             (self.paths.embers_bin.clone(), vec![], crate::embers::env(&m, &e, slot)?)
+        } else if role == Role::Portal {
+            let sec = crate::games::load_or_create(&*self.secrets)?;
+            let args = vec!["-c".to_string(), self.paths.games_conf().display().to_string(), "serve".to_string()];
+            (self.paths.games_bin.clone(), args, crate::games::env(&sec, crate::games::Grant { portal: true, ..Default::default() }))
         } else {
             (self.paths.node_bin.clone(), procs::node_args(&self.paths, &m, &role)?, self.node_env(&role)?)
         };
@@ -224,7 +238,7 @@ impl Supervisor {
     }
 
     fn wait_ready(&self, role: &Role, timeout: Duration) -> Result<(), String> {
-        if matches!(self.lock().state, ShardState::Starting(_) | ShardState::Stopped | ShardState::Failed(_)) {
+        if *role != Role::Portal && matches!(self.lock().state, ShardState::Starting(_) | ShardState::Stopped | ShardState::Failed(_)) {
             self.set_state(ShardState::Starting(format!("waiting for {}", role.name())));
         }
         let timeout = timeout.min(start_timeout_cap());
@@ -232,6 +246,11 @@ impl Supervisor {
         let check: Box<dyn Fn() -> Result<(), String>> = if *role == Role::Embers {
             let api = Api::new(format!("http://127.0.0.1:{}", self.manifest()?.embers.as_ref().map(|e| e.port).unwrap_or(0)));
             Box::new(move || api.get_ok("/api/service/ready"))
+        } else if *role == Role::Portal {
+            let g = self.manifest()?.games.ok_or("F1R3Games is not configured")?;
+            let api = Api::new(g.url());
+            let path = crate::games::ready_path(&g);
+            Box::new(move || api.get_ok(&path))
         } else {
             let api = self.api(role)?;
             Box::new(move || api.ready_why())
@@ -388,6 +407,10 @@ impl Supervisor {
         self.set_state(ShardState::Running);
         self.audit_loopback();
 
+        // F1R3Games: its stages and the portal. A failure here leaves the
+        // shard running and F1R3Games Failed (spec v0.4 §7).
+        self.start_games();
+
         // Resume an interrupted resize.
         if let Some(r) = self.manifest()?.resize.filter(|r| r.failed.is_none()) {
             info!("resuming resize to {}", r.target);
@@ -454,6 +477,7 @@ impl Supervisor {
             g.restart_at.clear();
             g.exits.clear();
         }
+        self.stop_role(&Role::Portal, Duration::from_secs(30));
         self.stop_role(&Role::Embers, Duration::from_secs(30));
         self.stop_role(&Role::Observer, Duration::from_secs(30));
         let mut vs: Vec<Proc> = {
@@ -467,6 +491,7 @@ impl Supervisor {
         }
         self.stop_role(&Role::Bootstrap, Duration::from_secs(30));
         self.set_state(ShardState::Stopped);
+        self.games_waiting();
     }
 
     // ------------------------------------------------------------------
@@ -496,7 +521,18 @@ impl Supervisor {
                 e.push(now);
                 e.retain(|t| now.duration_since(*t) < FAIL_WINDOW);
                 if e.len() >= FAILS_ALLOWED {
-                    failed = Some(format!("{} exited {} times in five minutes", r.name(), e.len()));
+                    let why = format!("{} exited {} times in five minutes", r.name(), e.len());
+                    if matches!(r, Role::Portal | Role::Embers) {
+                        // A service failing does not stop the shard (spec v0.4 §8.3).
+                        g.restart_at.remove(&r);
+                        if r == Role::Portal {
+                            g.games = GamesState::Failed(why.clone());
+                        }
+                        error!("{why}; leaving it stopped");
+                        crate::platform::notify(if r == Role::Portal { "F1R3Games stopped" } else { "Embers stopped" }, &format!("{why}. See the logs in {}.", self.paths.logs.display()));
+                        continue;
+                    }
+                    failed = Some(why);
                     break;
                 }
                 let n = g.restart_at.get(&r).map(|x| x.1 + 1).unwrap_or(0);
@@ -530,6 +566,7 @@ impl Supervisor {
     }
 
     fn health(&self) {
+        self.games_health();
         let Ok(m) = self.manifest() else { return };
         let mut roles = vec![Role::Bootstrap, Role::Observer];
         roles.extend(m.validators.iter().filter(|v| v.state.runs()).map(|v| Role::Validator(v.slot)));
@@ -788,6 +825,22 @@ impl Supervisor {
                 Ok(msg) => Response::ok(msg),
                 Err(e) => Response::err(e),
             },
+            Request::GamesSet { on, breeder, faucet_f1r3, open_at_first_run } => match self.games_set(on, breeder, faucet_f1r3, open_at_first_run) {
+                Ok(msg) => Response::ok(msg),
+                Err(e) => Response::err(e),
+            },
+            Request::GamesReinstall => match self.games_job("reinstall", |s| s.games_reinstall()) {
+                true => Response::ok("reinstalling F1R3Games"),
+                false => Response::err("busy; try again shortly"),
+            },
+            Request::GamesUpdate => match self.games_job("update", |s| s.games_update()) {
+                true => Response::ok("updating F1R3Games"),
+                false => Response::err("busy; try again shortly"),
+            },
+            Request::GamesMove => match self.games_job("move", |s| s.games_move()) {
+                true => Response::ok("moving F1R3Games to new ports"),
+                false => Response::err("busy; try again shortly"),
+            },
             Request::Shutdown => {
                 self.lock().shutdown = true;
                 Response::ok("shutting down")
@@ -856,6 +909,7 @@ impl Supervisor {
                 Role::Observer => m.observer.base_port,
                 Role::Validator(k) => m.validator(*k).ok_or("no such validator")?.base_port,
                 Role::Embers => m.embers.as_ref().ok_or("no embers")?.port,
+            Role::Portal => return Err("F1R3Games' ports are its browser origins; move it with \"Move F1R3Games to a new address\" (ctl games move --yes)".into()),
             };
             taken.retain(|p| !(own..own + 6).contains(p));
             match &role {
@@ -898,6 +952,11 @@ impl Supervisor {
             n.ready = g.procs.contains_key(&Role::Embers);
             nodes.push(n);
         }
+        if let Some(x) = m.games.as_ref().filter(|_| m.options.games) {
+            let mut n = node("portal".into(), Role::Portal, x.portal_port, "portal".into(), None);
+            n.ready = g.procs.contains_key(&Role::Portal) && g.games == GamesState::Running;
+            nodes.push(n);
+        }
         Report {
             shard: g.state.clone(),
             validators: m.n(),
@@ -919,6 +978,7 @@ impl Supervisor {
             exposed: g.exposed.clone(),
             embers_enabled: m.options.embers,
             gaze_integration: m.options.gaze_integration,
+            games: games_sup::report(m, &g.games),
         }
     }
 }
@@ -975,6 +1035,10 @@ impl SupOps {
             })?;
             self.sup.spawn_node(Role::Embers)?;
             info!("Embers moved to validator {other}");
+        }
+        if m.options.games && self.sup.running(&Role::Portal) {
+            self.sup.games_retarget(Some(slot))?;
+            info!("F1R3Games moved off validator {slot}");
         }
         Ok(())
     }

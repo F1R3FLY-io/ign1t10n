@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
 authors = ["F1R3FLY.io"]
-description = "macOS installer and shard manager: a local F1R3Node-Rust shard (bootstrap, 2-10 validators, observer, optional Embers) for the F1R3Gaze browser"
+description = "macOS installer and shard manager: a local F1R3Node-Rust shard (bootstrap, 2-10 validators, observer, optional Embers) for the F1R3Gaze browser, and F1R3Games served to any web browser"
 repository = "https://github.com/F1R3FLY-io/ign1t10n"
 publish = false
 
@@ -33,6 +33,7 @@ ureq = { version = "2.12", default-features = false }
 getrandom = "0.2"
 rand = "0.8"
 hex = "0.4"
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

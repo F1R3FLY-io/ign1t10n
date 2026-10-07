@@ -1,6 +1,8 @@
 //! End to end on one machine with a fake node (examples/fake_node.rs):
 //! headless provisioning (S0..S9 minus the launch agent), genesis, F1R3Gaze
-//! settings, crash recovery, a grow and a shrink, and uninstall.
+//! settings, crash recovery, a grow and a shrink, and uninstall; and, with
+//! the real `f1r3games-service` (`IGN1T10N_TEST_GAMES_BIN`), F1R3Games:
+//! G1..G7, the portal and game origins, restarts, off/on and reset.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,8 +39,13 @@ impl Env {
     }
 
     fn cmd(&self, args: &[&str]) -> (bool, String) {
+        self.cmd_env(args, &[])
+    }
+
+    fn cmd_env(&self, args: &[&str], extra: &[(&str, String)]) -> (bool, String) {
         let out = Command::new(exe())
             .args(args)
+            .envs(extra.iter().map(|(k, v)| (k.to_string(), v.clone())))
             .env("IGN1T10N_STATE_DIR", self.root.join("state"))
             .env("IGN1T10N_LOG_DIR", self.root.join("logs"))
             .env("F1R3GAZE_PROFILE", self.root.join("profile"))
@@ -93,7 +100,7 @@ fn pid_of(root: &Path, node: &str) -> Option<i32> {
 #[test]
 fn provision_run_resize_and_uninstall() {
     let e = Env::new();
-    let (ok, out) = e.cmd(&["ctl", "provision", "--non-interactive"]);
+    let (ok, out) = e.cmd(&["ctl", "provision", "--non-interactive", "--no-games"]);
     let log = || {
         let mut l = std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default();
         for n in ["bootstrap", "validator-1", "validator-2", "observer"] {
@@ -159,4 +166,164 @@ fn provision_run_resize_and_uninstall() {
     let settings = std::fs::read_to_string(e.root.join("profile/settings.conf")).unwrap();
     assert!(!settings.contains("managed by ign1t10n"));
     assert!(pid_of(&e.root, "bootstrap").is_none());
+}
+
+/// A bundle as the release workflow lays it out, with stand-in clients.
+fn games_bundle(root: &Path) -> PathBuf {
+    let res = root.join("res");
+    for (f, body) in [
+        ("portal/index.html", "<!doctype html><title>F1R3Games</title>portal"),
+        ("games/f1r3pix/index.html", "pix"),
+        ("games/f1r3pix/preview/canvas.html", "canvas"),
+        ("games/f1r3beat/index.html", "beat"),
+    ] {
+        let p = res.join(f);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+    let mut t = String::from("revision = \"test\"\nenv_version = 1\n");
+    for (id, v, client) in [("f1r3pix", 2, true), ("f1r3beat", 1, true), ("f1r3ink", 1, false), ("f1r3sidechat", 1, false), ("f1r3skein", 1, false)] {
+        t += &format!("[[game]]\nid = \"{id}\"\nenv_version = {v}\nclient = {client}\n");
+    }
+    std::fs::write(res.join("games.toml"), t).unwrap();
+    res
+}
+
+fn http(url: &str, host: Option<&str>) -> (u16, String, Option<String>, Option<String>) {
+    let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(10)).build();
+    let mut r = agent.get(url);
+    if let Some(h) = host {
+        r = r.set("host", h);
+    }
+    let resp = match r.call() {
+        Ok(x) => x,
+        Err(ureq::Error::Status(_, x)) => x,
+        Err(e) => panic!("{url}: {e}"),
+    };
+    let code = resp.status();
+    let loc = resp.header("location").map(str::to_string);
+    let csp = resp.header("content-security-policy").map(str::to_string);
+    (code, resp.into_string().unwrap_or_default(), loc, csp)
+}
+
+fn games_state(s: &serde_json::Value) -> &str {
+    s["games"]["state"]["state"].as_str().unwrap_or("")
+}
+
+#[test]
+fn f1r3games_installs_serves_survives_and_resets() {
+    let Some(games_bin) = std::env::var_os("IGN1T10N_TEST_GAMES_BIN").map(PathBuf::from) else {
+        eprintln!("skipped: set IGN1T10N_TEST_GAMES_BIN to a built f1r3games-service");
+        return;
+    };
+    let e = Env::new();
+    let res = games_bundle(&e.root);
+    let opened = e.root.join("opened-url");
+    let extra = [
+        ("IGN1T10N_GAMES_BIN", games_bin.display().to_string()),
+        ("IGN1T10N_GAMES_DIR", res.display().to_string()),
+        ("IGN1T10N_OPEN_URL_LOG", opened.display().to_string()),
+    ];
+    let cmd = |args: &[&str]| e.cmd_env(args, &extra);
+    let status = || {
+        let (ok, out) = cmd(&["ctl", "status", "--json"]);
+        assert!(ok, "{out}");
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()
+    };
+    let wait = |what: &str, secs: u64, f: &dyn Fn(&serde_json::Value) -> bool| -> serde_json::Value {
+        let t0 = Instant::now();
+        loop {
+            let s = status();
+            if f(&s) {
+                return s;
+            }
+            if t0.elapsed() > Duration::from_secs(secs) {
+                panic!(
+                    "timed out waiting for {what}: {s:#}\n{}\n--- games-job.log\n{}\n--- portal\n{}",
+                    std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default(),
+                    std::fs::read_to_string(e.root.join("logs/games-job.log")).unwrap_or_default(),
+                    std::fs::read_to_string(e.root.join("logs/portal.stdout.log")).unwrap_or_default()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    };
+
+    // G1..G7 at first run, the portal opened in "the browser".
+    let (ok, out) = cmd(&["ctl", "provision", "--non-interactive", "--no-embers", "--open"]);
+    assert!(ok, "provision failed:\n{out}\n{}\n{}", std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default(), std::fs::read_to_string(e.root.join("logs/games-job.log")).unwrap_or_default());
+    let s = wait("F1R3Games running", 120, &|s| games_state(s) == "running");
+    let url = s["games"]["url"].as_str().unwrap().to_string();
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    assert_eq!(std::fs::read_to_string(&opened).unwrap(), format!("{url}/"));
+    let games = s["games"]["games"].as_array().unwrap();
+    let pix = games.iter().find(|g| g["id"] == "f1r3pix").unwrap();
+    assert_eq!(pix["origin"], format!("http://localhost:{}", port + 1));
+    assert!(pix["registered"].as_bool().unwrap());
+    assert_eq!(pix["env_version"], 2);
+    let ink = games.iter().find(|g| g["id"] == "f1r3ink").unwrap();
+    assert!(!ink["registered"].as_bool().unwrap() && ink["origin"].is_null(), "no client, not registered");
+
+    // The portal: its shell and API at localhost only; the games on origins of their own.
+    let (code, body, _, _) = http(&format!("http://127.0.0.1:{port}/"), Some(&format!("localhost:{port}")));
+    assert_eq!((code, body.contains("portal")), (200, true));
+    let (code, _, loc, _) = http(&format!("http://127.0.0.1:{port}/api/health"), None);
+    assert_eq!((code, loc.as_deref()), (308, Some(format!("http://localhost:{port}/api/health").as_str())));
+    let (code, _, _, _) = http(&format!("http://127.0.0.1:{port}/api/health"), Some("evil.example"));
+    assert_eq!(code, 421);
+    let (code, body, _, _) = http(&format!("http://127.0.0.1:{port}/api/ready?games=f1r3pix,f1r3beat"), Some(&format!("localhost:{port}")));
+    assert_eq!(code, 200, "{body}");
+    let (code, body, _, _) = http(&format!("http://127.0.0.1:{port}/api/games/f1r3pix"), Some(&format!("localhost:{port}")));
+    assert!(code == 200 && body.contains(&format!("http://localhost:{}/f1r3pix/", port + 1)), "{body}");
+    let (code, body, _, csp) = http(&format!("http://127.0.0.1:{}/f1r3pix/", port + 1), Some(&format!("localhost:{}", port + 1)));
+    assert_eq!((code, body.as_str(), csp.as_deref()), (200, "pix", Some(format!("frame-ancestors {url}").as_str())));
+    let (code, _, _, _) = http(&format!("http://127.0.0.1:{}/f1r3beat/", port + 1), Some(&format!("localhost:{}", port + 1)));
+    assert_eq!(code, 404, "one origin, one game");
+
+    // No key on any command line, none in the configuration file.
+    let ps = String::from_utf8_lossy(&Command::new("ps").args(["-eo", "args"]).output().unwrap().stdout).to_string();
+    assert!(!ps.contains("F1R3GAMES_"), "keys only in environments");
+    let conf = std::fs::read_to_string(e.root.join("state/games/f1r3games.toml")).unwrap();
+    assert!(!conf.contains("_key") && !conf.contains("token"), "{conf}");
+
+    // A crashed portal comes back; the shard is untouched.
+    let pid = |root: &Path| -> Option<i32> {
+        let out = Command::new("pgrep").args(["-f", &format!("{} serve", root.join("state/games/f1r3games.toml").display())]).output().ok()?;
+        String::from_utf8_lossy(&out.stdout).lines().next()?.trim().parse().ok()
+    };
+    let p0 = pid(&e.root).expect("the portal runs");
+    unsafe { libc::kill(p0, libc::SIGKILL) };
+    wait("the portal back", 60, &|_| pid(&e.root).is_some_and(|p| p != p0));
+    wait("F1R3Games running again", 60, &|s| games_state(s) == "running" && state(s) == "running");
+
+    // Off frees the origins; on brings them back at the same address, deploying nothing.
+    // Registration jobs run (the job log's header line for each).
+    let regs = || std::fs::read_to_string(e.root.join("logs/games-job.log")).unwrap_or_default().lines().filter(|l| l.starts_with("--- ") && l.contains(" register-games ")).count();
+    let before = regs();
+    let (ok, out) = cmd(&["ctl", "games", "off"]);
+    assert!(ok, "{out}");
+    assert!(ign1t10n::ports::port_free(port) && ign1t10n::ports::port_free(port + 1));
+    let (ok, out) = cmd(&["ctl", "games", "on"]);
+    assert!(ok, "{out}");
+    let s = wait("F1R3Games on again", 120, &|s| games_state(s) == "running");
+    assert_eq!(s["games"]["url"], url.as_str(), "the origin never moves");
+    assert_eq!(regs(), before, "nothing registered again:\n{}\n{}", std::fs::read_to_string(e.root.join("logs/games-job.log")).unwrap_or_default(), std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default());
+
+    // Reset: a new chain, the same keys and origins; everything installed again.
+    let env_uri = |root: &Path| -> String {
+        let m: toml::Value = toml::from_str(&std::fs::read_to_string(root.join("state/shard.toml")).unwrap()).unwrap();
+        m["games"]["env_uri"].as_str().unwrap_or("").to_string()
+    };
+    let uri0 = env_uri(&e.root);
+    assert!(uri0.starts_with("rho:id:"), "{uri0}");
+    let (ok, out) = cmd(&["ctl", "reset", "--yes"]);
+    assert!(ok, "{out}");
+    let s = wait("reset and F1R3Games running", 240, &|s| state(s) == "running" && games_state(s) == "running" && s["genesis_hash"].is_string());
+    assert_eq!(s["games"]["url"], url.as_str());
+    assert_eq!(env_uri(&e.root), uri0, "keys outlive chains");
+    assert!(regs() > before, "registered on the new chain");
+
+    let (ok, out) = cmd(&["ctl", "uninstall", "--yes"]);
+    assert!(ok, "{out}");
+    assert!(pid(&e.root).is_none());
 }

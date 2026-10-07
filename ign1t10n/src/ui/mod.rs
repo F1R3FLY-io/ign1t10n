@@ -4,8 +4,8 @@
 #[cfg(target_os = "macos")]
 pub mod appkit;
 
-use crate::control::{Report, ShardState};
-use crate::provision::{disk_needed, memory_needed};
+use crate::control::{GamesState, Report, ShardState};
+use crate::provision::{disk_needed, memory_needed_with};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Dot {
@@ -27,6 +27,12 @@ pub fn dot(s: &ShardState) -> Dot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     OpenGaze,
+    /// Open the F1R3Games portal in the default browser.
+    OpenGames,
+    /// Apply a waiting F1R3Games update (after consent).
+    UpdateGames,
+    /// Start F1R3Games again after it failed (re-runs its stages).
+    RetryGames,
     Start,
     Stop,
     Configure,
@@ -73,10 +79,28 @@ pub fn menu(r: Option<&Report>) -> Vec<Entry> {
             if !r.exposed.is_empty() {
                 v.push(Entry::Info("   ⚠ some sockets listen off loopback (node N1 pending)".into()));
             }
+            if let Some(g) = &r.games {
+                let n = g.games.iter().filter(|x| x.registered && x.client).count();
+                v.push(Entry::Info(format!("F1R3Games: {}, {n} game{}", g.state.label(), if n == 1 { "" } else { "s" })));
+                v.push(Entry::Info(format!("   portal {}", g.url)));
+                for x in g.games.iter().filter(|x| x.client) {
+                    v.push(Entry::Info(format!("   {} {}", x.id, x.origin.clone().unwrap_or_default())));
+                }
+                if g.pending_update.is_some() {
+                    v.push(Entry::Item("Update F1R3Games…".into(), Action::UpdateGames, true));
+                }
+                if matches!(g.state, GamesState::Failed(_)) {
+                    v.push(Entry::Item("Try F1R3Games again".into(), Action::RetryGames, true));
+                }
+            }
         }
     }
     v.push(Entry::Separator);
     let running = r.map(|r| !matches!(r.shard, ShardState::Stopped | ShardState::Failed(_))).unwrap_or(false);
+    let games_up = r.and_then(|r| r.games.as_ref()).map(|g| matches!(g.state, GamesState::Running | GamesState::Degraded(_))).unwrap_or(false);
+    if r.and_then(|r| r.games.as_ref()).is_some() {
+        v.push(Entry::Item("Open F1R3Games".into(), Action::OpenGames, games_up));
+    }
     v.push(Entry::Item("Open F1R3Gaze".into(), Action::OpenGaze, true));
     v.push(if running { Entry::Item("Stop shard".into(), Action::Stop, true) } else { Entry::Item("Start shard".into(), Action::Start, true) });
     v.push(Entry::Item("Configure…".into(), Action::Configure, r.is_some()));
@@ -95,6 +119,9 @@ pub fn endpoints(r: &Report) -> String {
     let mut s = format!("validators: {}\nobserver: {}\nshard_id: {}\n", r.gaze_validators.join(", "), r.observer, r.shard_id);
     if let Some(e) = &r.embers {
         s += &format!("embers: {e}\n");
+    }
+    if let Some(g) = &r.games {
+        s += &format!("f1r3games: {}\n", g.url);
     }
     s
 }
@@ -116,7 +143,11 @@ pub struct Estimate {
 }
 
 pub fn estimate(n: u8, embers: bool, physical: Option<u64>, free: Option<u64>) -> Estimate {
-    let memory = memory_needed(n, embers);
+    estimate_with(n, embers, false, physical, free)
+}
+
+pub fn estimate_with(n: u8, embers: bool, games: bool, physical: Option<u64>, free: Option<u64>) -> Estimate {
+    let memory = memory_needed_with(n, embers, games);
     let disk = disk_needed(n);
     let gb = |b: u64| format!("{:.1} GB", b as f64 / (1u64 << 30) as f64);
     let (load, of) = match physical {
@@ -166,6 +197,23 @@ mod tests {
         r.shard = ShardState::Running;
         assert!(menu(Some(&r)).contains(&Entry::Item("Stop shard".into(), Action::Stop, true)));
         assert_eq!(dot(&ShardState::Failed("x".into())), Dot::Red);
+    }
+
+    #[test]
+    fn menu_shows_f1r3games_and_opens_it_only_when_up() {
+        use crate::control::{GameReport, GamesReport};
+        let mut g = GamesReport { state: GamesState::Installing("x".into()), url: "http://localhost:40700".into(), ..Default::default() };
+        g.games.push(GameReport { id: "f1r3pix".into(), origin: Some("http://localhost:40701".into()), client: true, registered: true, env_version: 2 });
+        let mut r = Report { shard: ShardState::Running, validators: 2, games: Some(g), ..Default::default() };
+        assert!(menu(Some(&r)).contains(&Entry::Item("Open F1R3Games".into(), Action::OpenGames, false)));
+        r.games.as_mut().unwrap().state = GamesState::Running;
+        let m = menu(Some(&r));
+        assert!(m.contains(&Entry::Item("Open F1R3Games".into(), Action::OpenGames, true)));
+        assert!(m.contains(&Entry::Info("F1R3Games: Running, 1 game".into())));
+        r.games.as_mut().unwrap().pending_update = Some("f1r3pix".into());
+        assert!(menu(Some(&r)).iter().any(|e| matches!(e, Entry::Item(_, Action::UpdateGames, true))));
+        assert!(endpoints(&r).contains("f1r3games: http://localhost:40700"));
+        assert!(estimate_with(2, true, true, None, None).memory > estimate(2, true, None, None).memory);
     }
 
     #[test]

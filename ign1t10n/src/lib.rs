@@ -1,6 +1,7 @@
 //! ign1t10n: installs and manages a local F1R3Node-Rust shard (a bootstrap
 //! node, 2 to 10 validators, an observer and, optionally, Embers) for the
-//! F1R3Gaze browser. See `docs/ign1t10n-macos-installer-spec` (v0.3) and
+//! F1R3Gaze browser, and F1R3Games served to any web browser. See
+//! `docs/ign1t10n-macos-installer-spec` (v0.4) and
 //! `docs/IMPLEMENTATION.md` for the decisions this code applies.
 //!
 //! Everything except `platform::macos` and `ui::appkit` is portable and is
@@ -11,6 +12,7 @@ pub mod amounts;
 pub mod api;
 pub mod control;
 pub mod embers;
+pub mod games;
 pub mod gaze;
 pub mod genesis;
 pub mod keys;

@@ -25,6 +25,21 @@ repository = "https://github.com/F1R3FLY-io/embers"
 revision   = "28e50d4bf287d76e3ea72b0704895d1f96a8c07f"
 package    = "embers"
 
+[f1r3games]
+# The portal service, the CLI, the shell and the game clients (spec v0.4).
+repository = "https://github.com/F1R3FLY-io/F1R3Games"
+revision   = "57a3b2796108f90dd4689abf33659a34c351d2ef"   # branch f1r3beat; plus the F1..F7 patches; main once merged
+clients    = ["f1r3pix", "f1r3beat"]                     # Decision 11: only games with a web client are registered
+# Environment versions installed on a new chain. Raise one when its
+# template's body changes: ign1t10n then asks before replacing it (it
+# discards that environment's on-chain state).
+env_version = 1
+game_versions = { f1r3pix = 1, f1r3beat = 1, f1r3ink = 1, f1r3sidechat = 1, f1r3skein = 1 }
+# F1R3Games work packages this revision contains.
+#   F1 keys from env, F2 origins, F3 headless registration, F4 dual stack and Host,
+#   F5 readiness, F6 headless CLI, F7 validator list
+has = []
+
 [platform]
 architectures = ["arm64"]   # Decision 2: Apple silicon only
 minimum_macos = "13.0"      # Decision 3: SMAppService

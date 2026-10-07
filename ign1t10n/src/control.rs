@@ -25,6 +25,25 @@ pub enum Request {
     SetOptions { embers: Option<bool>, gaze_integration: Option<bool> },
     /// Move a node whose port is taken to a free block.
     Reallocate { node: String },
+    /// F1R3Games settings (spec v0.4 §11.2): on/off, the breeder, the
+    /// faucet amount for new portal keys, opening the browser at first run.
+    GamesSet {
+        #[serde(default)]
+        on: Option<bool>,
+        #[serde(default)]
+        breeder: Option<bool>,
+        #[serde(default)]
+        faucet_f1r3: Option<i64>,
+        #[serde(default)]
+        open_at_first_run: Option<bool>,
+    },
+    /// Re-run G3..G6 (nothing already on the chain is deployed again).
+    GamesReinstall,
+    /// Apply an update that discards on-chain state (consent given).
+    GamesUpdate,
+    /// Move F1R3Games to a new decade of ports: new origins, so browser
+    /// keystores at the old address do not follow (consent given).
+    GamesMove,
     /// Stop the shard and exit the supervisor (uninstall, reset).
     Shutdown,
 }
@@ -75,6 +94,58 @@ impl ShardState {
     }
 }
 
+/// F1R3Games' own state machine (spec v0.4 §8.2), beside the shard's.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "state", content = "detail", rename_all = "kebab-case")]
+pub enum GamesState {
+    #[default]
+    Off,
+    /// The shard is not running.
+    Waiting,
+    Installing(String),
+    Running,
+    Degraded(String),
+    Failed(String),
+}
+
+impl GamesState {
+    pub fn label(&self) -> String {
+        match self {
+            GamesState::Off => "Off".into(),
+            GamesState::Waiting => "Waiting for the shard".into(),
+            GamesState::Installing(s) => format!("Installing ({s})"),
+            GamesState::Running => "Running".into(),
+            GamesState::Degraded(r) => format!("Degraded: {r}"),
+            GamesState::Failed(r) => format!("Failed: {r}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct GameReport {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    pub env_version: i64,
+    pub client: bool,
+    pub registered: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct GamesReport {
+    pub state: GamesState,
+    /// `http://localhost:<port>`.
+    pub url: String,
+    pub games: Vec<GameReport>,
+    pub faucet_f1r3: i64,
+    pub breeder: bool,
+    pub open_at_first_run: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_update: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_epoch: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct NodeReport {
     pub name: String,
@@ -111,6 +182,9 @@ pub struct Report {
     pub exposed: Vec<String>,
     pub embers_enabled: bool,
     pub gaze_integration: bool,
+    /// F1R3Games, when installed or chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub games: Option<GamesReport>,
 }
 
 pub fn call(paths: &Paths, req: &Request, timeout: Duration) -> Result<Response, String> {

@@ -15,6 +15,12 @@ pub struct Paths {
     /// Bundled executables: `f1r3node`, `embers`, and this binary.
     pub node_bin: PathBuf,
     pub embers_bin: PathBuf,
+    /// `Helpers/f1r3games-service` and `Helpers/f1r3games` (the CLI).
+    pub games_bin: PathBuf,
+    pub games_cli: PathBuf,
+    /// `Resources/f1r3games`: `games.toml`, `portal/` (the shell) and
+    /// `games/<id>/` (each bundled client).
+    pub games_res: PathBuf,
     /// `IGN1T10N_GAZE_BIN`: a `f1r3gaze` to use instead of the installed one
     /// (development, tests).
     pub gaze_override: Option<PathBuf>,
@@ -60,6 +66,9 @@ impl Paths {
         Paths {
             node_bin: env_path("IGN1T10N_NODE_BIN").unwrap_or_else(|| helpers.join("f1r3node")),
             embers_bin: env_path("IGN1T10N_EMBERS_BIN").unwrap_or_else(|| helpers.join("embers")),
+            games_bin: env_path("IGN1T10N_GAMES_BIN").unwrap_or_else(|| helpers.join("f1r3games-service")),
+            games_cli: env_path("IGN1T10N_GAMES_CLI").unwrap_or_else(|| helpers.join("f1r3games")),
+            games_res: env_path("IGN1T10N_GAMES_DIR").unwrap_or_else(|| contents.join("Resources/f1r3games")),
             gaze_override: env_path("IGN1T10N_GAZE_BIN"),
             bundled_gaze: contents.join("Resources/F1R3Gaze.app"),
             self_bin,
@@ -113,6 +122,10 @@ impl Paths {
     pub fn socket(&self) -> PathBuf { self.run().join("control.sock") }
     pub fn pidfile(&self) -> PathBuf { self.run().join("supervisor.pid") }
     pub fn archive(&self) -> PathBuf { self.state.join("archive") }
+    /// F1R3Games' state: its configuration, manifests and the CLI's home.
+    pub fn games(&self) -> PathBuf { self.state.join("games") }
+    pub fn games_conf(&self) -> PathBuf { self.games().join("f1r3games.toml") }
+    pub fn games_manifests(&self) -> PathBuf { self.games().join("manifests") }
     pub fn secrets_file(&self) -> PathBuf { self.state.join("secrets.dev.json") }
     pub fn log_file(&self, name: &str) -> PathBuf { self.logs.join(format!("{name}.log")) }
     pub fn stdout_log(&self, name: &str) -> PathBuf { self.logs.join(format!("{name}.stdout.log")) }

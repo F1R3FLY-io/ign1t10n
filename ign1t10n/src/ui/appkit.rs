@@ -64,6 +64,9 @@ struct Options {
     tolerance: Retained<NSTextField>,
     embers: Retained<NSButton>,
     gaze: Retained<NSButton>,
+    games: Retained<NSButton>,
+    /// Kept from the choices the view was opened with (not shown).
+    games_open: bool,
 }
 
 pub struct Ivars {
@@ -227,6 +230,21 @@ impl Delegate {
                     self.alert("Could not open F1R3Gaze", &e, &["OK"]).ignore();
                 }
             }
+            Action::OpenGames => {
+                let url = self.ivars().report.borrow().as_ref().and_then(|r| r.games.as_ref().map(|g| g.url.clone()));
+                if let Some(u) = url {
+                    if let Err(e) = crate::platform::open_url(&format!("{u}/")) {
+                        self.alert("Could not open F1R3Games", &e, &["OK"]).ignore();
+                    }
+                }
+            }
+            Action::UpdateGames => {
+                let what = self.ivars().report.borrow().as_ref().and_then(|r| r.games.as_ref().and_then(|g| g.pending_update.clone())).unwrap_or_default();
+                if self.alert("Update F1R3Games?", &format!("This release brings new versions of: {what}. Updating replaces them on the local shard, and what they held there is discarded. Browser keystores and their keys are unaffected."), &["Update", "Later"]) == 0 {
+                    self.call(Request::GamesUpdate);
+                }
+            }
+            Action::RetryGames => self.call(Request::GamesReinstall),
             Action::Start => {
                 if let Err(e) = provision::ensure_supervisor(&p, false) {
                     self.alert("The shard supervisor could not be started", &e, &["OK"]).ignore();
@@ -247,12 +265,12 @@ impl Delegate {
             Action::ShowLogs => crate::platform::reveal(&p.logs),
             Action::Reset => {
                 let n = self.ivars().report.borrow().as_ref().map(|r| r.validators).unwrap_or(2);
-                if self.alert("Reset the local shard?", "Every deploy, registry entry and balance on the local shard is erased and a new genesis is made. Your F1R3Gaze wallets are kept and funded again. The old data is archived.", &["Reset", "Cancel"]) == 0 {
+                if self.alert("Reset the local shard?", "Every deploy, registry entry and balance on the local shard is erased and a new genesis is made, and with it every F1R3Games profile, instance and play. Your F1R3Gaze wallets and your browser keystores keep their keys and are funded again. The old data is archived.", &["Reset", "Cancel"]) == 0 {
                     self.call(Request::Resize { target: n, new_shard: true });
                 }
             }
             Action::Uninstall => {
-                if self.alert("Uninstall ign1t10n?", "The local shard, its logs and its keys are removed. F1R3Gaze and its wallets are left alone.", &["Uninstall", "Cancel"]) == 0 {
+                if self.alert("Uninstall ign1t10n?", "The local shard, its logs and its keys are removed, and F1R3Games with them. F1R3Gaze and its wallets are left alone. Keystores your browsers hold for F1R3Games stay in each browser until you clear the localhost site's data; export any key you want to keep from the portal's Wallet page first.", &["Uninstall", "Cancel"]) == 0 {
                     let _ = control::call(&p, &Request::Shutdown, Duration::from_secs(10));
                     for _ in 0..120 {
                         if !p.socket().exists() {
@@ -319,15 +337,16 @@ impl Delegate {
     // ------------------------------------------------------------------
     // The options view: validators, Embers, F1R3Gaze
 
-    fn options_view(&self, n: u8, embers: bool, gaze: bool) -> Options {
+    fn options_view(&self, c: &Choices) -> Options {
+        let (n, embers, gaze) = (c.validators, c.embers, c.gaze_integration);
         let mtm = self.mtm();
         unsafe {
-            let view = NSView::initWithFrame(mtm.alloc(), rect(0.0, 0.0, 420.0, 150.0));
+            let view = NSView::initWithFrame(mtm.alloc(), rect(0.0, 0.0, 420.0, 176.0));
             let label = NSTextField::labelWithString(&ns("Validators"), mtm);
-            label.setFrame(rect(0.0, 124.0, 90.0, 20.0));
+            label.setFrame(rect(0.0, 150.0, 90.0, 20.0));
             let count = NSTextField::labelWithString(&ns(&n.to_string()), mtm);
-            count.setFrame(rect(96.0, 124.0, 30.0, 20.0));
-            let stepper = NSStepper::initWithFrame(mtm.alloc(), rect(126.0, 120.0, 20.0, 28.0));
+            count.setFrame(rect(96.0, 150.0, 30.0, 20.0));
+            let stepper = NSStepper::initWithFrame(mtm.alloc(), rect(126.0, 146.0, 20.0, 28.0));
             stepper.setMinValue(crate::MIN_VALIDATORS as f64);
             stepper.setMaxValue(crate::MAX_VALIDATORS as f64);
             stepper.setIncrement(1.0);
@@ -335,19 +354,22 @@ impl Delegate {
             stepper.setTarget(Some(self.target()));
             stepper.setAction(Some(sel!(stepperChanged:)));
             let estimate = NSTextField::wrappingLabelWithString(&ns(""), mtm);
-            estimate.setFrame(rect(0.0, 78.0, 420.0, 40.0));
+            estimate.setFrame(rect(0.0, 104.0, 420.0, 40.0));
             let tolerance = NSTextField::labelWithString(&ns(""), mtm);
-            tolerance.setFrame(rect(0.0, 58.0, 420.0, 18.0));
+            tolerance.setFrame(rect(0.0, 84.0, 420.0, 18.0));
             let e = NSButton::checkboxWithTitle_target_action(&ns("Bundle Embers (wallet balances, history and transfers in F1R3Gaze)"), Some(self.target()), Some(sel!(toggleChanged:)), mtm);
-            e.setFrame(rect(0.0, 30.0, 420.0, 20.0));
+            e.setFrame(rect(0.0, 56.0, 420.0, 20.0));
             e.setState(if embers { NSControlStateValueOn } else { NSControlStateValueOff });
             let g = NSButton::checkboxWithTitle_target_action(&ns("Use the local shard in F1R3Gaze"), Some(self.target()), Some(sel!(toggleChanged:)), mtm);
-            g.setFrame(rect(0.0, 4.0, 420.0, 20.0));
+            g.setFrame(rect(0.0, 30.0, 420.0, 20.0));
             g.setState(if gaze { NSControlStateValueOn } else { NSControlStateValueOff });
-            for sub in [&*label as &NSView, &count, &stepper, &estimate, &tolerance, &e, &g] {
+            let gm = NSButton::checkboxWithTitle_target_action(&ns("Install F1R3Games (play and browse galleries in any web browser)"), Some(self.target()), Some(sel!(toggleChanged:)), mtm);
+            gm.setFrame(rect(0.0, 4.0, 420.0, 20.0));
+            gm.setState(if c.games { NSControlStateValueOn } else { NSControlStateValueOff });
+            for sub in [&*label as &NSView, &count, &stepper, &estimate, &tolerance, &e, &g, &gm] {
                 view.addSubview(sub);
             }
-            Options { view, stepper, count, estimate, tolerance, embers: e, gaze: g }
+            Options { view, stepper, count, estimate, tolerance, embers: e, gaze: g, games: gm, games_open: c.games_open }
         }
     }
 
@@ -357,6 +379,8 @@ impl Delegate {
                 validators: o.stepper.integerValue().clamp(crate::MIN_VALIDATORS as isize, crate::MAX_VALIDATORS as isize) as u8,
                 embers: o.embers.state() == NSControlStateValueOn,
                 gaze_integration: o.gaze.state() == NSControlStateValueOn,
+                games: o.games.state() == NSControlStateValueOn,
+                games_open: o.games_open,
             }
         }
     }
@@ -365,7 +389,7 @@ impl Delegate {
         let b = self.ivars().options.borrow();
         let Some(o) = b.as_ref() else { return };
         let c = Self::read_options(o);
-        let e = super::estimate(c.validators, c.embers, crate::platform::physical_memory(), crate::platform::free_disk(&self.ivars().paths.state));
+        let e = super::estimate_with(c.validators, c.embers, c.games, crate::platform::physical_memory(), crate::platform::free_disk(&self.ivars().paths.state));
         unsafe {
             o.count.setStringValue(&ns(&c.validators.to_string()));
             let warn = match e.load {
@@ -380,7 +404,7 @@ impl Delegate {
 
     /// Show the options in an alert; `None` if cancelled.
     fn ask_options(&self, title: &str, info: &str, ok: &str, c: &Choices) -> Option<Choices> {
-        let o = self.options_view(c.validators, c.embers, c.gaze_integration);
+        let o = self.options_view(c);
         let view = o.view.clone();
         *self.ivars().options.borrow_mut() = Some(o);
         self.update_estimate();
@@ -400,7 +424,7 @@ impl Delegate {
             return None;
         }
         let c = chosen?;
-        let e = super::estimate(c.validators, c.embers, crate::platform::physical_memory(), None);
+        let e = super::estimate_with(c.validators, c.embers, c.games, crate::platform::physical_memory(), None);
         if e.load == Load::Confirm && self.alert("This uses most of this Mac's memory", &e.text, &["Continue", "Cancel"]) != 0 {
             return None;
         }
@@ -409,8 +433,12 @@ impl Delegate {
 
     fn configure(&self) {
         let Some(r) = self.ivars().report.borrow().clone() else { return };
-        let cur = Choices { validators: r.validators, embers: r.embers_enabled, gaze_integration: r.gaze_integration };
+        let games_on = r.games.as_ref().map(|g| g.state != crate::control::GamesState::Off).unwrap_or(false);
+        let cur = Choices { validators: r.validators, embers: r.embers_enabled, gaze_integration: r.gaze_integration, games: games_on, games_open: false };
         let Some(c) = self.ask_options("Configure the local shard", "Changes apply to the running shard.", "Apply", &cur) else { return };
+        if c.games != cur.games {
+            self.call(Request::GamesSet { on: Some(c.games), breeder: None, faucet_f1r3: None, open_at_first_run: None });
+        }
         if c.embers != cur.embers || c.gaze_integration != cur.gaze_integration {
             self.call(Request::SetOptions {
                 embers: (c.embers != cur.embers).then_some(c.embers),
@@ -439,14 +467,14 @@ impl Delegate {
         let existing = crate::manifest::Manifest::load(&p).ok().flatten();
         let choices = match &existing {
             // Resuming an interrupted provisioning: keep the recorded choices.
-            Some(m) => Choices { validators: m.shard.genesis_validators, embers: m.options.embers, gaze_integration: m.options.gaze_integration },
+            Some(m) => Choices { validators: m.shard.genesis_validators, embers: m.options.embers, gaze_integration: m.options.gaze_integration, games: m.options.games, games_open: m.options.games_open_at_first_run },
             None => {
                 let elsewhere = crate::gaze::points_elsewhere(&p.profile);
                 let d = Choices { gaze_integration: !elsewhere, ..Choices::default() };
                 let info = if elsewhere {
                     "ign1t10n will set up a local shard on this Mac. F1R3Gaze currently points at another shard; tick the last box to switch it to the local one."
                 } else {
-                    "ign1t10n will set up a local shard on this Mac: a bootstrap node, validators, an observer and, optionally, Embers, all on 127.0.0.1."
+                    "ign1t10n will set up a local shard on this Mac: a bootstrap node, validators, an observer and, optionally, Embers and F1R3Games, all on this Mac only. F1R3Games opens in your web browser when it is ready."
                 };
                 match self.ask_options("Set up your local shard", info, "Install", &d) {
                     Some(c) => c,
@@ -474,7 +502,7 @@ impl Delegate {
         unsafe {
             let w = NSWindow::initWithContentRect_styleMask_backing_defer(
                 mtm.alloc(),
-                rect(0.0, 0.0, 520.0, 330.0),
+                rect(0.0, 0.0, 520.0, 360.0),
                 NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable,
                 NSBackingStoreType::NSBackingStoreBuffered,
                 false,
@@ -485,7 +513,7 @@ impl Delegate {
             let mut rows = vec![];
             for (i, s) in Stage::ALL.iter().enumerate() {
                 let l = NSTextField::labelWithString(&ns(&format!("○  {}", s.title())), mtm);
-                l.setFrame(rect(24.0, 290.0 - 24.0 * i as f64, 470.0, 20.0));
+                l.setFrame(rect(24.0, 320.0 - 24.0 * i as f64, 470.0, 20.0));
                 content.addSubview(&l);
                 rows.push(l);
             }

@@ -14,3 +14,4 @@ echo "Removing $APP (administrator password may be requested)"
 /usr/bin/sudo /bin/rm -rf "$APP"
 /usr/bin/sudo /usr/sbin/pkgutil --forget io.f1r3fly.ign1t10n >/dev/null 2>&1 || true
 echo "ign1t10n is uninstalled. F1R3Gaze and its wallets were not touched."
+echo "F1R3Games keystores stay in each browser until you clear the localhost site's data."

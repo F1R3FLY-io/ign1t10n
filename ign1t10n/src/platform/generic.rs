@@ -38,6 +38,15 @@ pub fn open_gaze() -> Result<(), String> {
     std::process::Command::new(p.gaze_bin()).arg("gaze://newtab").spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Open a URL in the default browser. `IGN1T10N_OPEN_URL_LOG` (tests)
+/// records the URL in a file instead.
+pub fn open_url(url: &str) -> Result<(), String> {
+    if let Some(f) = std::env::var_os("IGN1T10N_OPEN_URL_LOG") {
+        return std::fs::write(f, url).map_err(|e| e.to_string());
+    }
+    std::process::Command::new("xdg-open").arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 pub fn reveal(path: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
