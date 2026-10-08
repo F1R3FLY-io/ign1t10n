@@ -1,0 +1,28 @@
+# Written by make-games.sh from versions.toml.
+revision = "57a3b27"
+env_version = 1
+
+[[game]]
+id = "f1r3pix"
+env_version = 1
+client = true
+
+[[game]]
+id = "f1r3beat"
+env_version = 1
+client = true
+
+[[game]]
+id = "f1r3ink"
+env_version = 1
+client = false
+
+[[game]]
+id = "f1r3sidechat"
+env_version = 1
+client = false
+
+[[game]]
+id = "f1r3skein"
+env_version = 1
+client = false
