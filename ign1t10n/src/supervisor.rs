@@ -64,6 +64,8 @@ struct Inner {
     games_busy: bool,
     /// When the breeder last ran (or was last tried).
     breeder_at: Option<Instant>,
+    /// When F1R3Ink's relay was last checked (named, funded).
+    relay_at: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -151,6 +153,7 @@ impl Supervisor {
                 last_audit = Instant::now();
                 self.audit_loopback();
                 self.breeder_tick();
+                self.relay_tick();
             }
             std::thread::sleep(Duration::from_millis(500));
         }
@@ -217,7 +220,9 @@ impl Supervisor {
         } else if role == Role::Portal {
             let sec = crate::games::load_or_create(&*self.secrets)?;
             let args = vec!["-c".to_string(), self.paths.games_conf().display().to_string(), "serve".to_string()];
-            (self.paths.games_bin.clone(), args, crate::games::env(&sec, crate::games::Grant { portal: true, ..Default::default() }))
+            // The relay's keys only when the portal's configuration runs it (spec v0.5 §10.8).
+            let relay = m.games.as_ref().is_some_and(|g| g.relay_on());
+            (self.paths.games_bin.clone(), args, crate::games::env(&sec, crate::games::Grant { portal: true, relay, ..Default::default() }))
         } else {
             (self.paths.node_bin.clone(), procs::node_args(&self.paths, &m, &role)?, self.node_env(&role)?)
         };
@@ -825,7 +830,7 @@ impl Supervisor {
                 Ok(msg) => Response::ok(msg),
                 Err(e) => Response::err(e),
             },
-            Request::GamesSet { on, breeder, faucet_f1r3, open_at_first_run } => match self.games_set(on, breeder, faucet_f1r3, open_at_first_run) {
+            Request::GamesSet { on, breeder, faucet_f1r3, open_at_first_run, relay } => match self.games_set(on, breeder, faucet_f1r3, open_at_first_run, relay) {
                 Ok(msg) => Response::ok(msg),
                 Err(e) => Response::err(e),
             },

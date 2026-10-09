@@ -238,6 +238,14 @@ impl Delegate {
                     }
                 }
             }
+            Action::OpenGamesAt(path) => {
+                let url = self.ivars().report.borrow().as_ref().and_then(|r| r.games.as_ref().map(|g| g.url.clone()));
+                if let Some(u) = url {
+                    if let Err(e) = crate::platform::open_url(&format!("{u}{path}")) {
+                        self.alert("Could not open F1R3Games", &e, &["OK"]).ignore();
+                    }
+                }
+            }
             Action::UpdateGames => {
                 let what = self.ivars().report.borrow().as_ref().and_then(|r| r.games.as_ref().and_then(|g| g.pending_update.clone())).unwrap_or_default();
                 if self.alert("Update F1R3Games?", &format!("This release brings new versions of: {what}. Updating replaces them on the local shard, and what they held there is discarded. Browser keystores and their keys are unaffected."), &["Update", "Later"]) == 0 {
@@ -437,7 +445,7 @@ impl Delegate {
         let cur = Choices { validators: r.validators, embers: r.embers_enabled, gaze_integration: r.gaze_integration, games: games_on, games_open: false };
         let Some(c) = self.ask_options("Configure the local shard", "Changes apply to the running shard.", "Apply", &cur) else { return };
         if c.games != cur.games {
-            self.call(Request::GamesSet { on: Some(c.games), breeder: None, faucet_f1r3: None, open_at_first_run: None });
+            self.call(Request::GamesSet { on: Some(c.games), breeder: None, faucet_f1r3: None, open_at_first_run: None, relay: None });
         }
         if c.embers != cur.embers || c.gaze_integration != cur.gaze_integration {
             self.call(Request::SetOptions {

@@ -18,12 +18,15 @@ const USAGE: &str = "usage:
   ign1t10n ctl embers on|off
   ign1t10n ctl games status [--json]     F1R3Games: the portal, its games, their origins
   ign1t10n ctl games on|off              run F1R3Games (off keeps its keys and registrations)
-  ign1t10n ctl games open                open the portal in the default browser
+  ign1t10n ctl games open [GAME [launch|gallery]]
+                                         open the portal (or a game's launch page or gallery)
+                                         in the default browser
   ign1t10n ctl games env                 the portal URL, for the f1r3games CLI
   ign1t10n ctl games reinstall           re-run funding, environments and registration
   ign1t10n ctl games update --yes        apply an update that discards on-chain game state
   ign1t10n ctl games move --yes          new ports (browser keystores stay at the old address)
   ign1t10n ctl games breeder on|off      run the F1R3Beat breeder daily
+  ign1t10n ctl games relay on|off        run F1R3Ink's relay (anonymous ink)
   ign1t10n ctl games faucet F1R3         what the portal's faucet gives a new key
   ign1t10n ctl gaze on|off               point F1R3Gaze at the local shard
   ign1t10n ctl reallocate NODE           new ports for a node whose ports are taken
@@ -113,6 +116,17 @@ fn games_status(p: &Paths, json: bool) {
         println!("  {:<13} {:<24} env v{:<3} {what}", x.id, x.origin.clone().unwrap_or_default(), x.env_version);
     }
     println!("faucet    {} F1R3 per new key; breeder {}", g.faucet_f1r3, if g.breeder { "on" } else { "off" });
+    let r = &g.relay;
+    println!(
+        "relay     {}{}",
+        match (r.on, r.running, r.named) {
+            (false, _, _) => "off".to_string(),
+            (true, false, _) => "on, waiting for F1R3Ink's client".to_string(),
+            (true, true, true) => format!("running at {}, named on chain", r.url),
+            (true, true, false) => format!("running at {}, NOT yet named on chain", r.url),
+        },
+        if r.address.is_empty() { String::new() } else { format!(" (key {})", r.address) }
+    );
     if let Some(u) = &g.pending_update {
         println!("update waiting: {u}
   (ctl games update --yes applies it)");
@@ -121,12 +135,13 @@ fn games_status(p: &Paths, json: bool) {
 
 fn games(p: &Paths, rest: &[String]) {
     let verb = rest.first().map(String::as_str).unwrap_or("status");
-    let set = |on: Option<bool>, breeder: Option<bool>, faucet_f1r3: Option<i64>| Request::GamesSet { on, breeder, faucet_f1r3, open_at_first_run: None };
+    let set = |on: Option<bool>, breeder: Option<bool>, faucet_f1r3: Option<i64>| Request::GamesSet { on, breeder, faucet_f1r3, open_at_first_run: None, relay: None };
     match verb {
         "status" => games_status(p, flag(rest, "--json")),
         "on" => say(p, set(Some(true), None, None)),
         "off" => say(p, set(Some(false), None, None)),
         "breeder" => say(p, set(None, Some(on_off(rest.get(1))), None)),
+        "relay" => say(p, Request::GamesSet { on: None, breeder: None, faucet_f1r3: None, open_at_first_run: None, relay: Some(on_off(rest.get(1))) }),
         "faucet" => {
             let n = rest.get(1).and_then(|s| s.parse().ok()).unwrap_or_else(|| die("games faucet F1R3"));
             say(p, set(None, None, Some(n)))
@@ -148,7 +163,8 @@ fn games(p: &Paths, rest: &[String]) {
             let r = call(p, Request::Status).status.unwrap_or_default();
             let g = r.games.unwrap_or_else(|| die("F1R3Games is not installed (ctl games on)"));
             if verb == "open" {
-                ign1t10n::platform::open_url(&format!("{}/", g.url)).unwrap_or_else(|e| die(e));
+                let path = ign1t10n::ui::portal_path(rest.get(1).map(String::as_str), rest.get(2).map(String::as_str)).unwrap_or_else(|e| die(e));
+                ign1t10n::platform::open_url(&format!("{}{path}", g.url)).unwrap_or_else(|e| die(e));
             } else {
                 println!("F1R3GAMES_SERVICE={}", g.url);
                 println!("F1R3GAMES_HOME={}", p.games().join("cli").display());

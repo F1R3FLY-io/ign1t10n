@@ -36,6 +36,9 @@ pub enum Request {
         faucet_f1r3: Option<i64>,
         #[serde(default)]
         open_at_first_run: Option<bool>,
+        /// F1R3Ink's relay (spec v0.5 §10.8).
+        #[serde(default)]
+        relay: Option<bool>,
     },
     /// Re-run G3..G6 (nothing already on the chain is deployed again).
     GamesReinstall,
@@ -144,6 +147,24 @@ pub struct GamesReport {
     pub pending_update: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_epoch: Option<String>,
+    /// F1R3Ink's relay: chosen, its address, and whether it is named on chain.
+    #[serde(default)]
+    pub relay: RelayReport,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RelayReport {
+    /// Chosen in the settings (`ctl games relay on|off`).
+    pub on: bool,
+    /// Running in the portal: chosen and F1R3Ink served.
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub address: String,
+    /// `<portal>/api/relay/f1r3ink`, the URL F1R3Ink's manifest names.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    /// Named by `setRelay` for F1R3Ink's current environment.
+    pub named: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

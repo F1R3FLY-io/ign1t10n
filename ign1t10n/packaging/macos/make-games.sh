@@ -49,11 +49,22 @@ for id in $CLIENTS; do
   case "$id" in
     f1r3pix) dir="$SRC/F1R3Pix/client" ;;
     f1r3beat) dir="$SRC/F1R3Beat/client" ;;
+    f1r3ink) dir="$SRC/F1R3Ink/client" ;;
     *) echo "no client directory known for $id"; exit 1 ;;
   esac
   ( cd "$dir" && npm ci --include=dev && npm test && npm run build )
   cp -R "$dir/dist" "$OUT/res/games/$id"
   [ -f "$OUT/res/games/$id/index.html" ] || { echo "$id: no index.html in its build"; exit 1; }
+  # Every gallery kind the game declares needs its renderer (spec v0.5 §10.5).
+  for kind in $(python3 - "$PORTAL/crates/games/src/lib.rs" "$id" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r'id: "%s",.*?galleries: &\[(.*?)\],' % re.escape(sys.argv[2]), src, re.S)
+print(" ".join(re.findall(r'kind: "([a-z0-9_-]+)"', m.group(1))) if m else "")
+PY
+  ); do
+    [ -f "$OUT/res/games/$id/preview/$kind.html" ] || { echo "$id: no gallery renderer preview/$kind.html in its build"; exit 1; }
+  done
 done
 
 # games.toml: what ign1t10n installs and registers.

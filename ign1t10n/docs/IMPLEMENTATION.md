@@ -1,9 +1,11 @@
 # ign1t10n: implementation notes
 
 This is the Rust implementation of the macOS installer described in
-*ign1t10n: macOS Installer Specification*, **version 0.4** (bootstrap, 2–10
+*ign1t10n: macOS Installer Specification*, **version 0.5** (bootstrap, 2–10
 validators, observer, in-place resizing, optional Embers, and F1R3Games
-served to any web browser). `docs/ign1t10n-macos-installer-spec.tex` is v0.4.
+served to any web browser, with F1R3Pix, F1R3Beat and F1R3Ink playable and
+F1R3Ink's relay run in the portal). `docs/ign1t10n-macos-installer-spec.tex`
+is v0.5.
 
 ## Decisions applied
 
@@ -90,14 +92,72 @@ Not verified here:
 ### CI and release
 
 * `versions.toml [f1r3games]` pins the revision, the clients and the
-  environment versions. **It still names `57a3b27`**, which predates the
-  F1..F7 patches: until they are merged and the revision re-pinned, the
-  `linux` CI job's F1R3Games test and the release's `games` job fail.
+  environment versions. Since v0.5 it names `d2381c6` (branch
+  `f1r3ink-impl`), which carries F1..F7 in tree and F8 (the relay); re-pin
+  to `main` once that branch is merged.
 * `packaging/macos/make-games.sh` builds the service, the CLI, the shell and
   the listed clients into `games-out/`; `build.sh` takes it as a fifth
   argument, signs the two new helpers and gates them (arm64, system libraries
   only, and none of the private keys committed in F1R3Games'
   `examples/local-shard`).
+
+## F1R3Ink and its relay (spec v0.5, 9 October 2026)
+
+F1R3Games at `d2381c6` adds F1R3Ink's web client (gallery renderers `round`
+and `flag`) and, in `f1r3games-service`, F1R3Ink's relay: `POST
+/api/relay/f1r3ink`, which takes a player's signed request, queues an
+anonymous ink, and every three blocks deploys the window's inks as one
+shuffled `f1r3ink.relayInk`, signed and paid for by the relay key. The
+environment accepts `relayInk` and `relayReveal` only from the key that
+F1R3Ink's own key named with `setRelay`. ign1t10n now:
+
+| What | Where |
+|------|-------|
+| Bundles F1R3Ink's client at `games/f1r3ink/` (port base+3, reserved since v0.4), and checks each declared gallery kind has its renderer | `versions.toml` (`clients`), `make-games.sh` |
+| Generates a relay key and a 32-byte handle secret in `games.secrets` (created on first use in a v0.4 install; kept across resets, like every F1R3Games key) | `games::GamesSecrets`, `load_or_create` |
+| Runs the relay in the portal: `[relay]` in `games/f1r3games.toml` (`base_url = <portal>/api/relay`, three-block window, 30 requests per player per hour); `F1R3GAMES_RELAY_KEY` and `_SECRET` only in the portal's environment | `games::render_config(.., relay)`, `Grant::relay`, `Supervisor::spawn_node` |
+| Gives jobs a configuration without `[relay]`, `games/f1r3games-jobs.toml`: the service loads the relay's keys for every subcommand whenever its configuration enables the relay, so a job reading the portal's file would need them | `Paths::games_jobs_conf`, `games_sup::job` |
+| Funds the relay (1,000 F1R3, topped up when below 100) and F1R3Ink's key (10 F1R3, it signs `setRelay`) | `games_sup::fund_relay`, `relay_tick` |
+| Registers F1R3Ink with `--relay-base <portal>/api/relay`, so its manifest names `<portal>/api/relay/f1r3ink` | `games_sup::games_register` |
+| G7: names the relay with `f1r3games -y ink set-relay <address>` under F1R3Ink's key, waits for finalisation, and records the F1R3Ink environment version it was named for (`relay_named`): a reset or a new F1R3Ink environment names it again. A failure degrades F1R3Games (the games play; anonymous ink waits) and is retried every 15 minutes | `games_sup::games_name_relay`, `relay_tick`, `games_state` |
+| Replaces a game's environment without asking when its version rose but it was never registered here (no instance can exist): F1R3Ink 1 → 2 on a v0.4 install | `games::silent_upgrades` |
+| `ctl games relay on|off`; `ctl games open [GAME [launch|gallery]]`; the menu's "New <game> game" and "<game> gallery" items for every registered game; the relay in `ctl games status` | `main.rs`, `ui::menu`, `ui::portal_path`, `control::RelayReport` |
+| Funds F1R3Beat's key before it signs `setBreeder` (a v0.4 defect: that deploy had nothing to pay its phlo with) | `games_sup::run_breeder` |
+
+Decisions taken here (spec v0.5 §16.3):
+
+* **The relay is on by default** and runs inside the portal process, as
+  F1R3Games implements it; there is no separate relay process. The local
+  stand-in for the Cooperative runs it, as the F1R3Ink design (D10) has the
+  Cooperative run the real one.
+* **F1R3Ink's manifest always names the relay's URL**, even with the relay
+  off; off, the portal answers 404 ("this portal runs no relay"), and a
+  round launched with anonymous ink cannot use it. Reason: `register-games`
+  compares a manifest's id, entry, environment URI, capabilities, renderers
+  and template hashes, but not `relay`, so a manifest differing only in its
+  relay is "current" and would not be registered again (F1R3Games work
+  package F9 proposes comparing it).
+* **F1R3Ink's environment is version 2.** The v0.4 bundle recorded 1 for an
+  environment body that F1R3Ink design v1 rewrote; installs that installed
+  version 1 never registered F1R3Ink, so it is replaced silently.
+
+Verified here (Linux, Rust 1.97, F1R3Games `d2381c6` built from source):
+the unit tests (44) and `tests/e2e.rs` against the real service and CLI and
+the stand-in node: a v0.4 bundle provisioned (no relay, F1R3Ink an
+unregistered v1 environment), then a v0.5 bundle at restart: F1R3Ink
+replaced at v2 with nothing waiting for consent, registered at its own
+origin with the relay URL in its manifest, its `flag` renderer served with
+`frame-ancestors`, `[relay]` in the portal's file and not the jobs', the
+relay named exactly once (`setRelay` seen by the node), a malformed relay
+request refused with 400 (not 404: the relay runs); `ctl games relay off` registering
+nothing and the relay answering 404; on again without naming it again; a
+reset naming it on the new chain. `make-games.sh` was run against
+`d2381c6` (host target): the service, the CLI, the shell, and the three
+clients with their tests, F1R3Ink's renderers present.
+
+Not verified here: a relayed ink end to end (it needs a real node: the
+stand-in cannot answer `f1r3ink.players`), and the two new menu items in
+`ui/appkit.rs` (no Apple target here).
 
 ## Layout
 
@@ -211,8 +271,8 @@ Not verified here:
 
 ```
 ign1t10n ctl provision --non-interactive [--validators N] [--no-embers] [--no-gaze] [--no-games] [--no-games-open] [--open]
-ign1t10n ctl games status [--json] | on | off | open | env | reinstall | update --yes | move --yes
-ign1t10n ctl games breeder on|off | faucet F1R3
+ign1t10n ctl games status [--json] | on | off | open [GAME [launch|gallery]] | env | reinstall | update --yes | move --yes
+ign1t10n ctl games breeder on|off | relay on|off | faucet F1R3
 ign1t10n ctl status [--json] | start | stop | restart
 ign1t10n ctl resize N [--new-shard] | retry | undo
 ign1t10n ctl fund ADDRESS F1R3
@@ -223,7 +283,9 @@ ign1t10n ctl reset [--validators N] --yes | uninstall --yes [--keep-archive]
 
 Tests: `cargo test -- --test-threads=1`; with
 `IGN1T10N_TEST_GAMES_BIN=<F1R3Games>/Portal/f1r3games-portal/target/debug/f1r3games-service`
-the F1R3Games end-to-end test runs too (it is skipped otherwise).
+(and the `f1r3games` CLI built beside it: `cargo build -p f1r3games-service
+-p f1r3games-cli`) the F1R3Games end-to-end test runs too (it is skipped
+otherwise).
 
 ## Known issues (from manual testing)
 

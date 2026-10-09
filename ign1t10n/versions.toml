@@ -28,17 +28,21 @@ package    = "embers"
 [f1r3games]
 # The portal service, the CLI, the shell and the game clients (spec v0.4).
 repository = "https://github.com/F1R3FLY-io/F1R3Games"
-revision   = "57a3b2796108f90dd4689abf33659a34c351d2ef"   # branch f1r3beat; plus the F1..F7 patches; main once merged
-clients    = ["f1r3pix", "f1r3beat"]                     # Decision 11: only games with a web client are registered
+revision   = "d2381c668e0ac4fddc1031c04b90c4f335c540c1"   # branch f1r3ink-impl (F1..F7 in tree, F1R3Ink, the relay); main once merged
+clients    = ["f1r3pix", "f1r3beat", "f1r3ink"]          # Decision 11: only games with a web client are registered
 # Environment versions installed on a new chain. Raise one when its
 # template's body changes: ign1t10n then asks before replacing it (it
-# discards that environment's on-chain state).
+# discards that environment's on-chain state), unless the game was never
+# registered, in which case nobody can have played it and it is replaced
+# without asking (spec v0.5 §10.9). F1R3Ink is 2: its environment was
+# rewritten for design v1 (enter, visibility, sealed inks, the relay).
 env_version = 1
-game_versions = { f1r3pix = 1, f1r3beat = 1, f1r3ink = 1, f1r3sidechat = 1, f1r3skein = 1 }
+game_versions = { f1r3pix = 1, f1r3beat = 1, f1r3ink = 2, f1r3sidechat = 1, f1r3skein = 1 }
 # F1R3Games work packages this revision contains.
 #   F1 keys from env, F2 origins, F3 headless registration, F4 dual stack and Host,
-#   F5 readiness, F6 headless CLI, F7 validator list
-has = []
+#   F5 readiness, F6 headless CLI, F7 validator list, F8 the F1R3Ink relay
+#   (`[relay]`, `relay-keygen`, `games-manifests --relay-base`, `ink set-relay`)
+has = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"]
 
 [platform]
 architectures = ["arm64"]   # Decision 2: Apple silicon only

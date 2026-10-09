@@ -75,6 +75,9 @@ impl Default for Options {
     }
 }
 
+/// The game whose manifest names the relay (F1R3Ink design §8).
+pub const RELAY_GAME: &str = "f1r3ink";
+
 /// F1R3Games on the local shard.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Games {
@@ -110,6 +113,18 @@ pub struct Games {
     pub nursery: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_epoch: Option<String>,
+    /// Run F1R3Ink's relay in the portal (spec v0.5 §10.8; default on, and on
+    /// for a schema-4 manifest written before the relay existed).
+    #[serde(default = "yes")]
+    pub relay: bool,
+    /// The relay key's address (from `games.secrets`).
+    #[serde(default)]
+    pub relay_address: String,
+    /// The F1R3Ink environment version at which `setRelay` named the relay on
+    /// this chain; None until named, and again after a reset or an upgrade of
+    /// that environment (which re-initialises its state).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_named: Option<i64>,
     #[serde(default, rename = "game")]
     pub game: Vec<Game>,
     #[serde(default)]
@@ -138,7 +153,11 @@ pub struct Game {
     pub manifest_sha256: Option<String>,
 }
 
-/// G1..G7 (spec v0.4 §10.4). From `funded` on they are cleared at reset.
+fn yes() -> bool {
+    true
+}
+
+/// G1..G8 (spec v0.5 §10.4). From `funded` on they are cleared at reset.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct GamesStages {
     #[serde(default)] pub secrets: bool,
@@ -178,6 +197,18 @@ impl Games {
     /// The games whose clients are served (and so registered).
     pub fn served(&self) -> Vec<&Game> {
         self.game.iter().filter(|g| g.client && g.port.is_some()).collect()
+    }
+    /// Whether the portal runs F1R3Ink's relay: chosen, and F1R3Ink served.
+    pub fn relay_on(&self) -> bool {
+        self.relay && self.served().iter().any(|g| g.id == RELAY_GAME)
+    }
+    /// The relay base the manifests name: `<portal>/api/relay`.
+    pub fn relay_base(&self) -> String {
+        format!("{}/api/relay", self.url())
+    }
+    /// Whether the relay is named on chain for F1R3Ink's current environment.
+    pub fn relay_current(&self) -> bool {
+        self.game(RELAY_GAME).is_some_and(|g| g.env_version > 0 && self.relay_named == Some(g.env_version))
     }
 }
 

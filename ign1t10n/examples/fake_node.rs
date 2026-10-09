@@ -9,7 +9,8 @@
 //! carrying `insertSigned` registers the first `rho:id:` URI in its term at
 //! the version it names, the `env.probe` read answers that version, and
 //! `games.register` stores the manifest (parsed from the term's Rholang
-//! literal) that `games.get` returns.
+//! literal) that `games.get` returns. A deploy calling F1R3Ink's `setRelay`
+//! is recorded in `nodes/fake-relay.txt`, one line per naming.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -172,6 +173,11 @@ fn games_deploy(dir: &std::path::Path, term: &str) {
             let mut envs: BTreeMap<String, i64> = std::fs::read_to_string(dir.join("nodes/fake-envs.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
             envs.insert(uri, v);
             let _ = std::fs::write(dir.join("nodes/fake-envs.json"), serde_json::to_string(&envs).unwrap());
+        }
+    }
+    if term.contains("@env!(\"setRelay\", ") {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("nodes/fake-relay.txt")) {
+            let _ = writeln!(f, "setRelay");
         }
     }
     let marker = "@env!(\"games\", \"register\", ";

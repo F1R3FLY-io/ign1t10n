@@ -130,8 +130,13 @@ jobs:
           # F1R3Games (A15, A17, A23): installed, registered, served at localhost only.
           $B ctl games status
           U=$($B ctl games env | sed -n 's/^F1R3GAMES_SERVICE=//p')
-          curl -fsS "$U/api/ready?games=f1r3pix,f1r3beat"
+          curl -fsS "$U/api/ready?games=f1r3pix,f1r3beat,f1r3ink"
           curl -fsS "$U/" | grep -qi '<html'
+          # F1R3Ink and its relay (spec v0.5 A24, A25): registered with the
+          # relay in its manifest, the relay running and named on the chain.
+          curl -fsS "$U/api/games/f1r3ink" | grep -q "$U/api/relay/f1r3ink"
+          $B ctl games status --json | python3 -c 'import json,sys; r=json.load(sys.stdin)["relay"]; assert r["running"] and r["named"], r'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d '{"message":"{}","publicKey":"00","signature":"00"}' "$U/api/relay/f1r3ink")" != 404
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$U/api/health")" = 421
           ! lsof -nP -iTCP -sTCP:LISTEN -c f1r3games | grep -vE '127\.0\.0\.1:|\[::1\]:|COMMAND'
           $B ctl games env

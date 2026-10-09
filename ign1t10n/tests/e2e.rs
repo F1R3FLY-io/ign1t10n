@@ -1,8 +1,10 @@
 //! End to end on one machine with a fake node (examples/fake_node.rs):
 //! headless provisioning (S0..S9 minus the launch agent), genesis, F1R3Gaze
 //! settings, crash recovery, a grow and a shrink, and uninstall; and, with
-//! the real `f1r3games-service` (`IGN1T10N_TEST_GAMES_BIN`), F1R3Games:
-//! G1..G7, the portal and game origins, restarts, off/on and reset.
+//! the real `f1r3games-service` (`IGN1T10N_TEST_GAMES_BIN`, with the
+//! `f1r3games` CLI beside it), F1R3Games: G1..G8, the portal and game
+//! origins, restarts, off/on, an upgrade from a v0.4 bundle to one with
+//! F1R3Ink's client and relay, the relay switch, and reset.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -168,7 +170,8 @@ fn provision_run_resize_and_uninstall() {
     assert!(pid_of(&e.root, "bootstrap").is_none());
 }
 
-/// A bundle as the release workflow lays it out, with stand-in clients.
+/// A bundle as the release workflow lays it out, with stand-in clients:
+/// v0.4's (F1R3Pix, F1R3Beat; F1R3Ink an environment at version 1).
 fn games_bundle(root: &Path) -> PathBuf {
     let res = root.join("res");
     for (f, body) in [
@@ -187,6 +190,30 @@ fn games_bundle(root: &Path) -> PathBuf {
     }
     std::fs::write(res.join("games.toml"), t).unwrap();
     res
+}
+
+/// The same bundle upgraded as v0.5 ships it: F1R3Ink's client and gallery
+/// renderers, and its rewritten environment at version 2.
+fn games_bundle_with_ink(res: &Path) {
+    for (f, body) in [("games/f1r3ink/index.html", "ink"), ("games/f1r3ink/preview/round.html", "round"), ("games/f1r3ink/preview/flag.html", "flag")] {
+        let p = res.join(f);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+    let mut t = String::from("revision = \"test2\"\nenv_version = 1\n");
+    for (id, v, client) in [("f1r3pix", 2, true), ("f1r3beat", 1, true), ("f1r3ink", 2, true), ("f1r3sidechat", 1, false), ("f1r3skein", 1, false)] {
+        t += &format!("[[game]]\nid = \"{id}\"\nenv_version = {v}\nclient = {client}\n");
+    }
+    std::fs::write(res.join("games.toml"), t).unwrap();
+}
+
+fn post(url: &str, host: &str, body: &str) -> (u16, String) {
+    let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(10)).build();
+    match agent.post(url).set("host", host).set("content-type", "application/json").send_string(body) {
+        Ok(x) => (x.status(), x.into_string().unwrap_or_default()),
+        Err(ureq::Error::Status(c, x)) => (c, x.into_string().unwrap_or_default()),
+        Err(e) => panic!("{url}: {e}"),
+    }
 }
 
 fn http(url: &str, host: Option<&str>) -> (u16, String, Option<String>, Option<String>) {
@@ -219,8 +246,11 @@ fn f1r3games_installs_serves_survives_and_resets() {
     let e = Env::new();
     let res = games_bundle(&e.root);
     let opened = e.root.join("opened-url");
+    let games_cli = games_bin.with_file_name("f1r3games");
+    assert!(games_cli.exists(), "the f1r3games CLI beside {}", games_bin.display());
     let extra = [
         ("IGN1T10N_GAMES_BIN", games_bin.display().to_string()),
+        ("IGN1T10N_GAMES_CLI", games_cli.display().to_string()),
         ("IGN1T10N_GAMES_DIR", res.display().to_string()),
         ("IGN1T10N_OPEN_URL_LOG", opened.display().to_string()),
     ];
@@ -249,7 +279,7 @@ fn f1r3games_installs_serves_survives_and_resets() {
         }
     };
 
-    // G1..G7 at first run, the portal opened in "the browser".
+    // G1..G8 at first run (a v0.4 bundle: no relay), the portal opened in "the browser".
     let (ok, out) = cmd(&["ctl", "provision", "--non-interactive", "--no-embers", "--open"]);
     assert!(ok, "provision failed:\n{out}\n{}\n{}", std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default(), std::fs::read_to_string(e.root.join("logs/games-job.log")).unwrap_or_default());
     let s = wait("F1R3Games running", 120, &|s| games_state(s) == "running");
@@ -263,6 +293,8 @@ fn f1r3games_installs_serves_survives_and_resets() {
     assert_eq!(pix["env_version"], 2);
     let ink = games.iter().find(|g| g["id"] == "f1r3ink").unwrap();
     assert!(!ink["registered"].as_bool().unwrap() && ink["origin"].is_null(), "no client, not registered");
+    assert_eq!(ink["env_version"], 1);
+    assert!(s["games"]["relay"]["on"].as_bool().unwrap() && !s["games"]["relay"]["running"].as_bool().unwrap(), "chosen, but no F1R3Ink to relay for");
 
     // The portal: its shell and API at localhost only; the games on origins of their own.
     let (code, body, _, _) = http(&format!("http://127.0.0.1:{port}/"), Some(&format!("localhost:{port}")));
@@ -309,6 +341,57 @@ fn f1r3games_installs_serves_survives_and_resets() {
     assert_eq!(s["games"]["url"], url.as_str(), "the origin never moves");
     assert_eq!(regs(), before, "nothing registered again:\n{}\n{}", std::fs::read_to_string(e.root.join("logs/games-job.log")).unwrap_or_default(), std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default());
 
+    // Upgrade to a bundle with F1R3Ink's client: its environment, never
+    // registered here, is replaced without asking; it is registered at its
+    // own origin with the relay in its manifest; the relay runs in the portal
+    // and is named on the chain.
+    let relays = || std::fs::read_to_string(e.root.join("state/nodes/fake-relay.txt")).unwrap_or_default().lines().count();
+    games_bundle_with_ink(&res);
+    let (ok, out) = cmd(&["ctl", "restart"]);
+    assert!(ok, "{out}");
+    let s = wait("F1R3Games running with F1R3Ink", 240, &|s| state(s) == "running" && games_state(s) == "running" && s["games"]["games"].as_array().unwrap().iter().any(|g| g["id"] == "f1r3ink" && g["registered"] == true));
+    assert_eq!(s["games"]["url"], url.as_str(), "the origin never moves");
+    assert!(s["games"]["pending_update"].is_null(), "nothing waits for consent: {s:#}");
+    let ink = s["games"]["games"].as_array().unwrap().iter().find(|g| g["id"] == "f1r3ink").unwrap().clone();
+    assert_eq!(ink["origin"], format!("http://localhost:{}", port + 3));
+    assert_eq!(ink["env_version"], 2);
+    let relay = &s["games"]["relay"];
+    assert!(relay["running"].as_bool().unwrap() && relay["named"].as_bool().unwrap(), "{relay:#}");
+    assert_eq!(relay["url"], format!("{url}/api/relay/f1r3ink"));
+    assert_eq!(relays(), 1, "named once:\n{}\n{}", std::fs::read_to_string(e.root.join("logs/games-job.log")).unwrap_or_default().lines().rev().take(30).collect::<Vec<_>>().join("\n"), std::fs::read_to_string(e.root.join("logs/ign1t10n.log")).unwrap_or_default().lines().rev().take(30).collect::<Vec<_>>().join("\n"));
+    let (code, body, _, _) = http(&format!("http://127.0.0.1:{port}/api/games/f1r3ink"), Some(&format!("localhost:{port}")));
+    assert!(code == 200 && body.contains(&format!("http://localhost:{}/f1r3ink/", port + 3)) && body.contains(&format!("{url}/api/relay/f1r3ink")), "{body}");
+    let (code, body, _, csp) = http(&format!("http://127.0.0.1:{}/f1r3ink/preview/flag.html", port + 3), Some(&format!("localhost:{}", port + 3)));
+    assert_eq!((code, body.as_str(), csp.as_deref()), (200, "flag", Some(format!("frame-ancestors {url}").as_str())));
+    // The relay answers (it is configured): an unsigned request is refused, not 404.
+    let (code, body) = post(&format!("http://127.0.0.1:{port}/api/relay/f1r3ink"), &format!("localhost:{port}"), r#"{"message":"{}","publicKey":"zz","signature":"zz"}"#);
+    assert_eq!(code, 400, "{body}");
+    let conf = std::fs::read_to_string(e.root.join("state/games/f1r3games.toml")).unwrap();
+    assert!(conf.contains("[relay]") && !conf.contains("secret") && !conf.contains("_key"), "{conf}");
+    let jobs = std::fs::read_to_string(e.root.join("state/games/f1r3games-jobs.toml")).unwrap();
+    assert!(!jobs.contains("[relay]"), "jobs never run the relay: {jobs}");
+    let ps = String::from_utf8_lossy(&Command::new("ps").args(["-eo", "args"]).output().unwrap().stdout).to_string();
+    assert!(!ps.contains("F1R3GAMES_"), "keys only in environments");
+    let st = cmd(&["ctl", "games", "status"]).1;
+    assert!(st.contains("named on chain") && st.contains("f1r3ink"), "{st}");
+
+    // The relay switched off: the portal runs none (F1R3Ink's manifest still
+    // says where it lives, and is not registered again); on again: back, and
+    // still named (same environment).
+    let regs_before_relay = regs();
+    let (ok, out) = cmd(&["ctl", "games", "relay", "off"]);
+    assert!(ok, "{out}");
+    wait("relay off", 120, &|s| games_state(s) == "running" && !s["games"]["relay"]["running"].as_bool().unwrap());
+    assert_eq!(regs(), regs_before_relay, "the relay switch registers nothing");
+    let (code, body) = post(&format!("http://127.0.0.1:{port}/api/relay/f1r3ink"), &format!("localhost:{port}"), r#"{"message":"{}","publicKey":"zz","signature":"zz"}"#);
+    assert_eq!(code, 404, "no relay runs: {body}");
+    assert!(!std::fs::read_to_string(e.root.join("state/games/f1r3games.toml")).unwrap().contains("[relay]"));
+    let (ok, out) = cmd(&["ctl", "games", "relay", "on"]);
+    assert!(ok, "{out}");
+    let s = wait("relay on", 120, &|s| games_state(s) == "running" && s["games"]["relay"]["running"].as_bool().unwrap());
+    assert!(s["games"]["relay"]["named"].as_bool().unwrap());
+    assert_eq!(relays(), 1, "still named for this environment; not named again");
+
     // Reset: a new chain, the same keys and origins; everything installed again.
     let env_uri = |root: &Path| -> String {
         let m: toml::Value = toml::from_str(&std::fs::read_to_string(root.join("state/shard.toml")).unwrap()).unwrap();
@@ -322,6 +405,10 @@ fn f1r3games_installs_serves_survives_and_resets() {
     assert_eq!(s["games"]["url"], url.as_str());
     assert_eq!(env_uri(&e.root), uri0, "keys outlive chains");
     assert!(regs() > before, "registered on the new chain");
+    let s = wait("the relay named on the new chain", 120, &|s| s["games"]["relay"]["named"].as_bool().unwrap_or(false));
+    assert_eq!(s["games"]["relay"]["url"], format!("{url}/api/relay/f1r3ink"));
+    let ink = s["games"]["games"].as_array().unwrap().iter().find(|g| g["id"] == "f1r3ink").unwrap().clone();
+    assert_eq!((ink["env_version"].clone(), ink["registered"].clone()), (serde_json::json!(2), serde_json::json!(true)));
 
     let (ok, out) = cmd(&["ctl", "uninstall", "--yes"]);
     assert!(ok, "{out}");

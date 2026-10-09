@@ -125,6 +125,8 @@ impl Paths {
     /// F1R3Games' state: its configuration, manifests and the CLI's home.
     pub fn games(&self) -> PathBuf { self.state.join("games") }
     pub fn games_conf(&self) -> PathBuf { self.games().join("f1r3games.toml") }
+    /// The jobs' configuration: the portal's without `[relay]` (spec v0.5 §10.8).
+    pub fn games_jobs_conf(&self) -> PathBuf { self.games().join("f1r3games-jobs.toml") }
     pub fn games_manifests(&self) -> PathBuf { self.games().join("manifests") }
     pub fn secrets_file(&self) -> PathBuf { self.state.join("secrets.dev.json") }
     pub fn log_file(&self, name: &str) -> PathBuf { self.logs.join(format!("{name}.log")) }

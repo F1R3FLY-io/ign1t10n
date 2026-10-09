@@ -18,7 +18,7 @@ jobs:
         run: python3 -c "import tomllib;print('rev='+tomllib.load(open('versions.toml','rb'))['f1r3games']['revision'])" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with: { repository: F1R3FLY-io/F1R3Games, ref: "${{ steps.g.outputs.rev }}", path: f1r3games }
-      - run: cargo build --locked --manifest-path f1r3games/Portal/f1r3games-portal/Cargo.toml -p f1r3games-service
+      - run: cargo build --locked --manifest-path f1r3games/Portal/f1r3games-portal/Cargo.toml -p f1r3games-service -p f1r3games-cli   # the CLI names F1R3Ink's relay (G7)
       - run: cargo test --locked -- --test-threads=1
         env:
           IGN1T10N_TEST_GAMES_BIN: ${{ github.workspace }}/f1r3games/Portal/f1r3games-portal/target/debug/f1r3games-service

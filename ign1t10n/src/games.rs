@@ -1,18 +1,23 @@
-//! F1R3Games (spec v0.4 §10): the portal service and the games' clients,
+//! F1R3Games (spec v0.5 §10): the portal service and the games' clients,
 //! served to any web browser at `http://localhost`, with the portal and game
-//! environments installed on the local shard and the games registered by a
-//! local stand-in for the F1R3FLY.io Cooperative.
+//! environments installed on the local shard, the games registered by a
+//! local stand-in for the F1R3FLY.io Cooperative, and F1R3Ink's relay run in
+//! the portal and named on the chain.
 //!
 //! This module holds what is not process supervision: the secrets
 //! (`games.secrets`), the bundle's description (`Resources/f1r3games/
 //! games.toml`), the portal's configuration, the environments handed to the
 //! portal and to its jobs, and the job runner. The supervisor drives the
-//! stages G1..G7 (`supervisor/games.rs`).
+//! stages G1..G8 (`supervisor/games_sup.rs`).
 //!
 //! Every key reaches a process only in its own environment (F1R3Games work
 //! package F1), and only the keys that process needs: the portal gets the
-//! service key, the environment key and the token secret; the Cooperative's
-//! key goes only to the registration job, the breeder's only to the breeder.
+//! service key, the environment key and the token secret, and, when the
+//! relay runs, the relay key and the handle secret; the Cooperative's key goes
+//! only to the registration job, the breeder's only to the breeder, a game's
+//! own key only to the jobs that sign for that game. Jobs read a configuration
+//! without `[relay]` (`f1r3games-jobs.toml`), because the service loads the
+//! relay's keys whenever its configuration enables the relay.
 
 use crate::keys::Key;
 use crate::logging::MB;
@@ -37,6 +42,16 @@ pub const COOP_F1R3: i64 = 1_000;
 pub const BREEDER_F1R3: i64 = 1_000;
 /// Per new portal key (Decision 14).
 pub const DEFAULT_FAUCET_F1R3: i64 = 100;
+/// The relay pays the phlo of every anonymous ink it relays (F1R3Ink design
+/// D10): funded at G3, topped up to this when it falls below `RELAY_LOW_F1R3`.
+pub const RELAY_F1R3: i64 = 1_000;
+pub const RELAY_LOW_F1R3: i64 = 100;
+/// A game's own key signs a few administrative deploys (`setRelay`,
+/// `setBreeder`) and pays their phlo.
+pub const GAME_KEY_F1R3: i64 = 10;
+/// The relay's window and per-player limit (the service's defaults).
+pub const RELAY_WINDOW_BLOCKS: i64 = 3;
+pub const RELAY_PER_HOUR: i64 = 30;
 /// How long a job may wait for its deploys to read back.
 pub const JOB_WAIT_SECS: u64 = 300;
 
@@ -49,6 +64,13 @@ pub struct GamesSecrets {
     pub breeder_key: String,
     /// One environment key per game, by id.
     pub game_keys: BTreeMap<String, String>,
+    /// F1R3Ink's relay key (it signs and pays for relayed inks), and the
+    /// secret its handles are derived from. Absent in a v0.4 install's
+    /// secrets; created on first use.
+    #[serde(default)]
+    pub relay_key: String,
+    #[serde(default)]
+    pub relay_secret: String,
 }
 
 impl GamesSecrets {
@@ -61,6 +83,8 @@ impl GamesSecrets {
             coop_key: k(),
             breeder_key: k(),
             game_keys: GAME_IDS.iter().map(|id| (id.to_string(), k())).collect(),
+            relay_key: k(),
+            relay_secret: hex::encode(crate::random_bytes::<32>()),
         }
     }
 
@@ -76,6 +100,12 @@ impl GamesSecrets {
     pub fn breeder_address(&self) -> Result<String, String> {
         Self::address(&self.breeder_key)
     }
+    pub fn relay_address(&self) -> Result<String, String> {
+        Self::address(&self.relay_key)
+    }
+    pub fn game_address(&self, id: &str) -> Result<String, String> {
+        Self::address(self.game_keys.get(id).ok_or_else(|| format!("no key for {id}"))?)
+    }
 }
 
 /// The secrets, created on first use and kept across resets and upgrades
@@ -84,12 +114,20 @@ impl GamesSecrets {
 pub fn load_or_create(s: &dyn Secrets) -> Result<GamesSecrets, String> {
     if let Some(t) = s.get(ACCOUNT)? {
         let mut g: GamesSecrets = serde_json::from_str(&t).map_err(|e| format!("games secrets: {e}"))?;
-        // A newer F1R3Games may define a game an older install lacks a key for.
+        // A newer F1R3Games may define a game an older install lacks a key
+        // for, and a v0.4 install has no relay key.
         let missing: Vec<&str> = GAME_IDS.iter().copied().filter(|id| !g.game_keys.contains_key(*id)).collect();
-        if !missing.is_empty() {
-            for id in missing {
-                g.game_keys.insert(id.into(), Key::generate().secret_hex());
-            }
+        let grow = !missing.is_empty() || g.relay_key.is_empty() || g.relay_secret.is_empty();
+        for id in missing {
+            g.game_keys.insert(id.into(), Key::generate().secret_hex());
+        }
+        if g.relay_key.is_empty() {
+            g.relay_key = Key::generate().secret_hex();
+        }
+        if g.relay_secret.is_empty() {
+            g.relay_secret = hex::encode(crate::random_bytes::<32>());
+        }
+        if grow {
             s.set(ACCOUNT, &serde_json::to_string(&g).unwrap())?;
         }
         return Ok(g);
@@ -138,10 +176,11 @@ pub fn bundle(p: &Paths) -> Result<Bundle, String> {
 /// keys and the ports of the portal and of each bundled client. Ports
 /// already recorded are kept (Principle "Stable origins").
 pub fn prepare(m: &mut Manifest, sec: &GamesSecrets, b: &Bundle) -> Result<(), String> {
-    let mut g = m.games.clone().unwrap_or(Games { faucet_f1r3: DEFAULT_FAUCET_F1R3, ..Default::default() });
+    let mut g = m.games.clone().unwrap_or(Games { faucet_f1r3: DEFAULT_FAUCET_F1R3, relay: true, ..Default::default() });
     g.service_address = sec.service_address()?;
     g.coop_address = sec.coop_address()?;
     g.breeder_address = sec.breeder_address()?;
+    g.relay_address = sec.relay_address()?;
     g.stages.secrets = true;
     for id in GAME_IDS {
         if g.game(id).is_none() {
@@ -190,9 +229,11 @@ fn listen(port: u16, ipv6: bool) -> toml::Value {
     toml::Value::Array(v)
 }
 
-/// The portal's configuration (spec v0.4 Appendix A.2). `validators` are the
+/// The portal's configuration (spec v0.5 Appendix A.2). `validators` are the
 /// deploy targets (F7: one is drawn per deploy); `observer` the reads.
-pub fn render_config(p: &Paths, g: &Games, validators: &[String], observer: &str, shard_id: &str, env_version: i64) -> String {
+/// `relay` adds the `[relay]` table (the portal's own file, when the relay
+/// runs); the jobs' file never has it, so a job needs no relay key.
+pub fn render_config(p: &Paths, g: &Games, validators: &[String], observer: &str, shard_id: &str, env_version: i64, relay: bool) -> String {
     use toml::Value as V;
     let mut t = toml::Table::new();
     t.insert("listen".into(), listen(g.portal_port, g.ipv6));
@@ -227,6 +268,15 @@ pub fn render_config(p: &Paths, g: &Games, validators: &[String], observer: &str
         })
         .collect();
     t.insert("origins".into(), V::Array(origins));
+    if relay {
+        // F1R3Ink's relay (F8): keys from F1R3GAMES_RELAY_KEY and _SECRET.
+        let mut r = toml::Table::new();
+        r.insert("enabled".into(), V::Boolean(true));
+        r.insert("base_url".into(), V::String(g.relay_base()));
+        r.insert("window_blocks".into(), V::Integer(RELAY_WINDOW_BLOCKS));
+        r.insert("per_hour".into(), V::Integer(RELAY_PER_HOUR));
+        t.insert("relay".into(), V::Table(r));
+    }
     format!("# Rendered by ign1t10n at every start. Keys come from the environment.\n{}", toml::to_string_pretty(&t).unwrap())
 }
 
@@ -239,6 +289,7 @@ pub fn after_reset(g: &Games) -> Games {
     x.nursery = None;
     x.last_epoch = None;
     x.pending_update = None;
+    x.relay_named = None;
     for gm in x.game.iter_mut() {
         gm.env_version = 0;
         gm.registered = false;
@@ -268,6 +319,8 @@ pub struct Grant {
     pub portal: bool,
     pub game_keys: bool,
     pub coop: bool,
+    /// The relay key and handle secret (the portal, when the relay runs).
+    pub relay: bool,
 }
 
 pub fn env(sec: &GamesSecrets, grant: Grant) -> Vec<(String, String)> {
@@ -285,6 +338,10 @@ pub fn env(sec: &GamesSecrets, grant: Grant) -> Vec<(String, String)> {
     }
     if grant.coop {
         e.push(("F1R3GAMES_COOP_KEY".into(), sec.coop_key.clone()));
+    }
+    if grant.relay {
+        e.push(("F1R3GAMES_RELAY_KEY".into(), sec.relay_key.clone()));
+        e.push(("F1R3GAMES_RELAY_SECRET".into(), sec.relay_secret.clone()));
     }
     e
 }
@@ -382,7 +439,8 @@ pub fn env_uris(status: &serde_json::Value) -> BTreeMap<String, (String, Option<
 
 /// What an upgrade of the bundle asks of the chain, compared with the
 /// manifest: games whose environment version rose, and whether the portal
-/// environment's did. Both discard on-chain state, so both need consent.
+/// environment's did. Both discard on-chain state, so both need consent,
+/// except for a game never registered here (see `silent_upgrades`).
 pub fn pending(g: &Games, b: &Bundle) -> Option<String> {
     let mut what = vec![];
     if g.stages.portal_env && b.env_version > g.env_version {
@@ -390,12 +448,29 @@ pub fn pending(g: &Games, b: &Bundle) -> Option<String> {
     }
     for bg in &b.games {
         if let Some(x) = g.game(&bg.id) {
-            if g.stages.game_envs && x.env_version > 0 && bg.env_version > x.env_version {
+            if g.stages.game_envs && x.env_version > 0 && x.registered && bg.env_version > x.env_version {
                 what.push(format!("{} ({} → {}; replaces its live instances)", bg.id, x.env_version, bg.env_version));
             }
         }
     }
     (!what.is_empty()).then(|| what.join("; "))
+}
+
+/// Games whose environment version rose but which were never registered on
+/// this chain: no instance of them can exist (a launch needs the game in the
+/// registry), so their environments are replaced without asking (spec v0.5
+/// §10.9). F1R3Ink arriving with its first client is the case in point.
+pub fn silent_upgrades(g: &Games, b: &Bundle) -> Vec<(String, i64)> {
+    if !g.stages.game_envs {
+        return vec![];
+    }
+    b.games
+        .iter()
+        .filter_map(|bg| {
+            let x = g.game(&bg.id)?;
+            (x.env_version > 0 && !x.registered && bg.env_version > x.env_version).then(|| (bg.id.clone(), bg.env_version))
+        })
+        .collect()
 }
 
 /// A first-run nursery for the F1R3Beat breeder: public, default shape.
@@ -481,8 +556,9 @@ mod tests {
         prepare(&mut m, &GamesSecrets::generate(), &b).unwrap();
         let mut g = m.games.unwrap();
         g.ipv6 = true;
-        let t = render_config(&p, &g, &["http://127.0.0.1:40413".into(), "http://127.0.0.1:40423".into()], "http://127.0.0.1:40453", "root", 1);
+        let t = render_config(&p, &g, &["http://127.0.0.1:40413".into(), "http://127.0.0.1:40423".into()], "http://127.0.0.1:40453", "root", 1, false);
         let v: toml::Table = toml::from_str(&t).unwrap();
+        assert!(v.get("relay").is_none(), "no relay unless asked");
         assert_eq!(v["public_host"].as_str().unwrap(), format!("localhost:{}", g.portal_port));
         assert_eq!(v["listen"].as_array().unwrap().len(), 2);
         assert_eq!(v["validator_urls"].as_array().unwrap().len(), 2);
@@ -494,13 +570,73 @@ mod tests {
     }
 
     #[test]
+    fn the_relay_runs_only_with_f1r3ink_served_and_only_in_the_portal() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let b = bundle_on_disk(&p);
+        let sec = GamesSecrets::generate();
+        let mut m = sample();
+        prepare(&mut m, &sec, &b).unwrap();
+        let g = m.games.clone().unwrap();
+        assert!(g.relay, "on by default for a new install");
+        assert_eq!(g.relay_address, sec.relay_address().unwrap());
+        assert!(!g.relay_on(), "F1R3Ink has no client in this bundle");
+        // F1R3Ink's client arrives.
+        std::fs::create_dir_all(p.games_res.join("games/f1r3ink")).unwrap();
+        std::fs::write(p.games_res.join("games/f1r3ink/index.html"), "x").unwrap();
+        let b = bundle(&p).unwrap();
+        prepare(&mut m, &sec, &b).unwrap();
+        let mut g = m.games.clone().unwrap();
+        assert_eq!(g.game("f1r3ink").unwrap().port, Some(g.portal_port + 3), "its reserved port");
+        assert!(g.relay_on());
+        let t = render_config(&p, &g, &["http://127.0.0.1:40413".into()], "http://127.0.0.1:40453", "root", 1, true);
+        let v: toml::Table = toml::from_str(&t).unwrap();
+        assert_eq!(v["relay"]["enabled"].as_bool(), Some(true));
+        assert_eq!(v["relay"]["base_url"].as_str().unwrap(), format!("http://localhost:{}/api/relay", g.portal_port));
+        assert_eq!(v["origins"].as_array().unwrap().len(), 3);
+        assert!(!t.contains("key_file") && !t.contains("secret"), "keys only from the environment: {t}");
+        // Named for the environment it was named in; a new version needs it again.
+        g.game_mut("f1r3ink").unwrap().env_version = 2;
+        assert!(!g.relay_current());
+        g.relay_named = Some(2);
+        assert!(g.relay_current());
+        g.game_mut("f1r3ink").unwrap().env_version = 3;
+        assert!(!g.relay_current());
+        g.relay_named = Some(3);
+        assert_eq!(after_reset(&g).relay_named, None, "a new chain names it again");
+        g.relay = false;
+        assert!(!g.relay_on());
+    }
+
+    #[test]
+    fn a_v04_manifest_and_secrets_gain_the_relay() {
+        // shard.toml written by v0.4: no relay fields.
+        let t = "portal_port = 40700\nfaucet_f1r3 = 100\n";
+        let g: Games = toml::from_str(t).unwrap();
+        assert!(g.relay && g.relay_address.is_empty() && g.relay_named.is_none());
+        // games.secrets written by v0.4: no relay key or secret.
+        let d = tempfile::tempdir().unwrap();
+        let s = crate::secrets::FileSecrets { path: d.path().join("s.json") };
+        let mut j: serde_json::Value = serde_json::to_value(GamesSecrets::generate()).unwrap();
+        j.as_object_mut().unwrap().remove("relay_key");
+        j.as_object_mut().unwrap().remove("relay_secret");
+        s.set(ACCOUNT, &j.to_string()).unwrap();
+        let a = load_or_create(&s).unwrap();
+        assert!(a.relay_address().is_ok() && hex::decode(&a.relay_secret).unwrap().len() == 32);
+        assert_eq!(load_or_create(&s).unwrap(), a, "created once, then kept");
+    }
+
+    #[test]
     fn grants_are_least_privilege() {
         let s = GamesSecrets::generate();
         let names = |e: Vec<(String, String)>| e.into_iter().map(|(k, _)| k).filter(|k| k.starts_with("F1R3GAMES")).collect::<Vec<_>>();
         let portal = names(env(&s, Grant { portal: true, ..Default::default() }));
         assert_eq!(portal, ["F1R3GAMES_SERVICE_KEY", "F1R3GAMES_ENV_KEY", "F1R3GAMES_TOKEN_SECRET"]);
-        let reg = names(env(&s, Grant { portal: true, game_keys: true, coop: true }));
+        let reg = names(env(&s, Grant { portal: true, game_keys: true, coop: true, ..Default::default() }));
         assert!(reg.contains(&"F1R3GAMES_COOP_KEY".to_string()) && reg.contains(&"F1R3GAMES_GAME_KEY_F1R3PIX".to_string()));
+        assert!(!reg.iter().any(|k| k.starts_with("F1R3GAMES_RELAY")), "jobs never get the relay's keys");
+        let portal = names(env(&s, Grant { portal: true, relay: true, ..Default::default() }));
+        assert_eq!(portal, ["F1R3GAMES_SERVICE_KEY", "F1R3GAMES_ENV_KEY", "F1R3GAMES_TOKEN_SECRET", "F1R3GAMES_RELAY_KEY", "F1R3GAMES_RELAY_SECRET"]);
     }
 
     #[test]
@@ -511,10 +647,26 @@ mod tests {
         let mut g = Games { env_version: 1, ..Default::default() };
         g.stages.portal_env = true;
         g.stages.game_envs = true;
-        g.game = vec![Game { id: "f1r3pix".into(), env_version: 2, ..Default::default() }, Game { id: "f1r3beat".into(), env_version: 1, ..Default::default() }];
+        g.game = vec![
+            Game { id: "f1r3pix".into(), env_version: 2, registered: true, ..Default::default() },
+            Game { id: "f1r3beat".into(), env_version: 1, registered: true, ..Default::default() },
+            Game { id: "f1r3ink".into(), env_version: 1, ..Default::default() },
+        ];
         assert_eq!(pending(&g, &b), None);
+        assert!(silent_upgrades(&g, &b).is_empty());
+        // A registered game: its players' instances would go, so it asks.
         g.game[0].env_version = 1;
         assert!(pending(&g, &b).unwrap().contains("f1r3pix (1 → 2"));
+        assert!(silent_upgrades(&g, &b).is_empty());
+        // A game never registered here: nobody can have played it, so it does not ask.
+        let mut b2 = b.clone();
+        b2.games.iter_mut().find(|x| x.id == "f1r3ink").unwrap().env_version = 2;
+        g.game[0].env_version = 2;
+        assert_eq!(pending(&g, &b2), None);
+        assert_eq!(silent_upgrades(&g, &b2), vec![("f1r3ink".to_string(), 2)]);
+        // Before G5 has ever run there is nothing to upgrade.
+        g.stages.game_envs = false;
+        assert!(silent_upgrades(&g, &b2).is_empty());
     }
 
     #[test]

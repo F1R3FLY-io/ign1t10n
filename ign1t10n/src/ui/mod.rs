@@ -29,6 +29,8 @@ pub enum Action {
     OpenGaze,
     /// Open the F1R3Games portal in the default browser.
     OpenGames,
+    /// Open a page of the portal (a game's launch page or gallery).
+    OpenGamesAt(String),
     /// Apply a waiting F1R3Games update (after consent).
     UpdateGames,
     /// Start F1R3Games again after it failed (re-runs its stages).
@@ -86,6 +88,11 @@ pub fn menu(r: Option<&Report>) -> Vec<Entry> {
                 for x in g.games.iter().filter(|x| x.client) {
                     v.push(Entry::Info(format!("   {} {}", x.id, x.origin.clone().unwrap_or_default())));
                 }
+                if g.relay.on && !g.relay.running {
+                    v.push(Entry::Info("   relay: waiting for F1R3Ink".into()));
+                } else if g.relay.running {
+                    v.push(Entry::Info(format!("   relay: {}", if g.relay.named { "running" } else { "running, not yet named" })));
+                }
                 if g.pending_update.is_some() {
                     v.push(Entry::Item("Update F1R3Games…".into(), Action::UpdateGames, true));
                 }
@@ -98,8 +105,15 @@ pub fn menu(r: Option<&Report>) -> Vec<Entry> {
     v.push(Entry::Separator);
     let running = r.map(|r| !matches!(r.shard, ShardState::Stopped | ShardState::Failed(_))).unwrap_or(false);
     let games_up = r.and_then(|r| r.games.as_ref()).map(|g| matches!(g.state, GamesState::Running | GamesState::Degraded(_))).unwrap_or(false);
-    if r.and_then(|r| r.games.as_ref()).is_some() {
+    if let Some(g) = r.and_then(|r| r.games.as_ref()) {
         v.push(Entry::Item("Open F1R3Games".into(), Action::OpenGames, games_up));
+        // Each registered game: start a new instance, or browse its plays
+        // (spec v0.5 §11.1), in the default browser.
+        for x in g.games.iter().filter(|x| x.client && x.registered) {
+            let name = display_name(&x.id);
+            v.push(Entry::Item(format!("   New {name} game"), Action::OpenGamesAt(format!("/games/{}/launch", x.id)), games_up));
+            v.push(Entry::Item(format!("   {name} gallery"), Action::OpenGamesAt(format!("/games/{}/gallery", x.id)), games_up));
+        }
     }
     v.push(Entry::Item("Open F1R3Gaze".into(), Action::OpenGaze, true));
     v.push(if running { Entry::Item("Stop shard".into(), Action::Stop, true) } else { Entry::Item("Start shard".into(), Action::Start, true) });
@@ -113,6 +127,29 @@ pub fn menu(r: Option<&Report>) -> Vec<Entry> {
     v.push(Entry::Separator);
     v.push(Entry::Item("Quit ign1t10n".into(), Action::Quit, true));
     v
+}
+
+/// How a game is named to people: its id with the product's capitals.
+pub fn display_name(id: &str) -> String {
+    match id {
+        "f1r3pix" => "F1R3Pix".into(),
+        "f1r3beat" => "F1R3Beat".into(),
+        "f1r3ink" => "F1R3Ink".into(),
+        "f1r3sidechat" => "F1R3SideChat".into(),
+        "f1r3skein" => "F1R3Skein".into(),
+        other => other.into(),
+    }
+}
+
+/// The portal path for `ctl games open [GAME [launch|gallery]]`.
+pub fn portal_path(game: Option<&str>, page: Option<&str>) -> Result<String, String> {
+    match (game, page) {
+        (None, _) => Ok("/".into()),
+        (Some(g), _) if !crate::games::GAME_IDS.contains(&g) => Err(format!("no game {g}; one of {}", crate::games::GAME_IDS.join(", "))),
+        (Some(g), None | Some("launch")) => Ok(format!("/games/{g}/launch")),
+        (Some(g), Some("gallery")) => Ok(format!("/games/{g}/gallery")),
+        (Some(_), Some(p)) => Err(format!("{p}: launch or gallery")),
+    }
 }
 
 pub fn endpoints(r: &Report) -> String {
@@ -204,12 +241,21 @@ mod tests {
         use crate::control::{GameReport, GamesReport};
         let mut g = GamesReport { state: GamesState::Installing("x".into()), url: "http://localhost:40700".into(), ..Default::default() };
         g.games.push(GameReport { id: "f1r3pix".into(), origin: Some("http://localhost:40701".into()), client: true, registered: true, env_version: 2 });
+        g.games.push(GameReport { id: "f1r3ink".into(), origin: Some("http://localhost:40703".into()), client: true, registered: false, env_version: 2 });
         let mut r = Report { shard: ShardState::Running, validators: 2, games: Some(g), ..Default::default() };
         assert!(menu(Some(&r)).contains(&Entry::Item("Open F1R3Games".into(), Action::OpenGames, false)));
         r.games.as_mut().unwrap().state = GamesState::Running;
         let m = menu(Some(&r));
         assert!(m.contains(&Entry::Item("Open F1R3Games".into(), Action::OpenGames, true)));
         assert!(m.contains(&Entry::Info("F1R3Games: Running, 1 game".into())));
+        // Registered games can be launched or browsed; an unregistered one cannot.
+        assert!(m.contains(&Entry::Item("   New F1R3Pix game".into(), Action::OpenGamesAt("/games/f1r3pix/launch".into()), true)));
+        assert!(m.contains(&Entry::Item("   F1R3Pix gallery".into(), Action::OpenGamesAt("/games/f1r3pix/gallery".into()), true)));
+        assert!(!m.iter().any(|e| matches!(e, Entry::Item(t, _, _) if t.contains("F1R3Ink"))));
+        assert_eq!(portal_path(Some("f1r3ink"), Some("gallery")).unwrap(), "/games/f1r3ink/gallery");
+        assert_eq!(portal_path(Some("f1r3ink"), None).unwrap(), "/games/f1r3ink/launch");
+        assert_eq!(portal_path(None, None).unwrap(), "/");
+        assert!(portal_path(Some("chess"), None).is_err() && portal_path(Some("f1r3ink"), Some("x")).is_err());
         r.games.as_mut().unwrap().pending_update = Some("f1r3pix".into());
         assert!(menu(Some(&r)).iter().any(|e| matches!(e, Entry::Item(_, Action::UpdateGames, true))));
         assert!(endpoints(&r).contains("f1r3games: http://localhost:40700"));
