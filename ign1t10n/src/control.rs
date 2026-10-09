@@ -36,7 +36,7 @@ pub enum Request {
         faucet_f1r3: Option<i64>,
         #[serde(default)]
         open_at_first_run: Option<bool>,
-        /// F1R3Ink's relay (spec v0.5 §10.8).
+        /// F1R3Ink's relay (spec v0.5 §11.7).
         #[serde(default)]
         relay: Option<bool>,
     },

@@ -55,14 +55,18 @@ for id in $CLIENTS; do
   ( cd "$dir" && npm ci --include=dev && npm test && npm run build )
   cp -R "$dir/dist" "$OUT/res/games/$id"
   [ -f "$OUT/res/games/$id/index.html" ] || { echo "$id: no index.html in its build"; exit 1; }
-  # Every gallery kind the game declares needs its renderer (spec v0.5 §10.5).
-  for kind in $(python3 - "$PORTAL/crates/games/src/lib.rs" "$id" <<'PY'
+  # Every gallery kind the game declares needs its renderer (spec v0.5 §16).
+  KINDS="$(python3 - "$PORTAL/crates/games/src/lib.rs" "$id" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 m = re.search(r'id: "%s",.*?galleries: &\[(.*?)\],' % re.escape(sys.argv[2]), src, re.S)
-print(" ".join(re.findall(r'kind: "([a-z0-9_-]+)"', m.group(1))) if m else "")
+kinds = re.findall(r'kind: "([a-z0-9_-]+)"', m.group(1)) if m else []
+if not kinds:
+    sys.exit("no gallery kinds found for %s in %s" % (sys.argv[2], sys.argv[1]))
+print(" ".join(kinds))
 PY
-  ); do
+)" || exit 1
+  for kind in $KINDS; do
     [ -f "$OUT/res/games/$id/preview/$kind.html" ] || { echo "$id: no gallery renderer preview/$kind.html in its build"; exit 1; }
   done
 done

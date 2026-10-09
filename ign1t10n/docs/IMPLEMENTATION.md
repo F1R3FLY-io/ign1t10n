@@ -115,16 +115,16 @@ F1R3Ink's own key named with `setRelay`. ign1t10n now:
 |------|-------|
 | Bundles F1R3Ink's client at `games/f1r3ink/` (port base+3, reserved since v0.4), and checks each declared gallery kind has its renderer | `versions.toml` (`clients`), `make-games.sh` |
 | Generates a relay key and a 32-byte handle secret in `games.secrets` (created on first use in a v0.4 install; kept across resets, like every F1R3Games key) | `games::GamesSecrets`, `load_or_create` |
-| Runs the relay in the portal: `[relay]` in `games/f1r3games.toml` (`base_url = <portal>/api/relay`, three-block window, 30 requests per player per hour); `F1R3GAMES_RELAY_KEY` and `_SECRET` only in the portal's environment | `games::render_config(.., relay)`, `Grant::relay`, `Supervisor::spawn_node` |
+| Runs the relay in the portal: `[relay]` in `games/f1r3games.toml` (`base_url = <portal>/api/relay`, three-block window, 30 requests per player per hour); `F1R3GAMES_RELAY_KEY` and `_SECRET` only in the portal's environment, and only when the file the portal will read enables the relay (so a setting saved while the file could not be rendered never starts a portal without the keys it asks for) | `games::render_config(.., relay)`, `games::config_runs_relay`, `Grant::relay`, `Supervisor::spawn_node` |
 | Gives jobs a configuration without `[relay]`, `games/f1r3games-jobs.toml`: the service loads the relay's keys for every subcommand whenever its configuration enables the relay, so a job reading the portal's file would need them | `Paths::games_jobs_conf`, `games_sup::job` |
-| Funds the relay (1,000 F1R3, topped up when below 100) and F1R3Ink's key (10 F1R3, it signs `setRelay`) | `games_sup::fund_relay`, `relay_tick` |
+| Funds the relay (1,000 F1R3, topped up when below 100) and F1R3Ink's key (10 F1R3, it signs `setRelay`); a funding failure is logged and retried, never fails the install | `games_sup::fund_relay`, `relay_tick` |
 | Registers F1R3Ink with `--relay-base <portal>/api/relay`, so its manifest names `<portal>/api/relay/f1r3ink` | `games_sup::games_register` |
 | G7: names the relay with `f1r3games -y ink set-relay <address>` under F1R3Ink's key, waits for finalisation, and records the F1R3Ink environment version it was named for (`relay_named`): a reset or a new F1R3Ink environment names it again. A failure degrades F1R3Games (the games play; anonymous ink waits) and is retried every 15 minutes | `games_sup::games_name_relay`, `relay_tick`, `games_state` |
 | Replaces a game's environment without asking when its version rose but it was never registered here (no instance can exist): F1R3Ink 1 → 2 on a v0.4 install | `games::silent_upgrades` |
 | `ctl games relay on|off`; `ctl games open [GAME [launch|gallery]]`; the menu's "New <game> game" and "<game> gallery" items for every registered game; the relay in `ctl games status` | `main.rs`, `ui::menu`, `ui::portal_path`, `control::RelayReport` |
 | Funds F1R3Beat's key before it signs `setBreeder` (a v0.4 defect: that deploy had nothing to pay its phlo with) | `games_sup::run_breeder` |
 
-Decisions taken here (spec v0.5 §16.3):
+Decisions taken here (spec v0.5 §19.4, Decisions 18–23):
 
 * **The relay is on by default** and runs inside the portal process, as
   F1R3Games implements it; there is no separate relay process. The local
@@ -155,9 +155,19 @@ reset naming it on the new chain. `make-games.sh` was run against
 `d2381c6` (host target): the service, the CLI, the shell, and the three
 clients with their tests, F1R3Ink's renderers present.
 
+An independent review of the change found, and these were fixed: the
+portal's relay keys were granted from the setting rather than from the file
+it reads (a crash restart after a busy `relay off` could loop); a failed
+quarter-hourly relay check left F1R3Games `Failed`; a relay funding failure
+failed the whole install; an unnamed relay (Degraded) stopped the breeder;
+the status reported the relay running while the portal was down; and
+`make-games.sh` passed silently when it found no gallery kinds.
+
 Not verified here: a relayed ink end to end (it needs a real node: the
-stand-in cannot answer `f1r3ink.players`), and the two new menu items in
-`ui/appkit.rs` (no Apple target here).
+stand-in cannot answer `f1r3ink.players`), and the new menu action in
+`ui/appkit.rs` (no Apple target here). `relay_named` records a finalised
+`setRelay`, not a read-back of the environment's relay (no global read exists;
+F10 would provide one).
 
 ## Layout
 

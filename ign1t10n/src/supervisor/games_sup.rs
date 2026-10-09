@@ -1,4 +1,4 @@
-//! F1R3Games under the supervisor (spec v0.5 §10): stages G1..G7, the
+//! F1R3Games under the supervisor (spec v0.5 §11): stages G1..G7, the
 //! portal process (with F1R3Ink's relay in it), its health, retargeting it
 //! off a withdrawing validator, upgrades that need consent and those that do
 //! not, moving it to new origins, the relay's naming and funding, and the
@@ -46,7 +46,8 @@ pub(super) fn report(m: &Manifest, state: &GamesState) -> Option<crate::control:
         last_epoch: g.last_epoch.clone(),
         relay: RelayReport {
             on: g.relay,
-            running: g.relay_on(),
+            // Configured, and the portal up (the relay lives in it).
+            running: g.relay_on() && matches!(state, GamesState::Running | GamesState::Degraded(_)),
             address: g.relay_address.clone(),
             url: if g.relay_on() { format!("{}/{RELAY_GAME}", g.relay_base()) } else { String::new() },
             named: g.relay_current(),
@@ -198,16 +199,17 @@ impl Supervisor {
             if g.breeder {
                 self.fund_if_short(&g.breeder_address, dust(games::BREEDER_F1R3))?;
             }
-            if g.relay_on() {
-                self.fund_relay(&sec)?;
-            }
             self.update(|m| {
                 m.games.as_mut().unwrap().stages.funded = true;
                 Ok(())
             })?;
-        } else if g.relay_on() {
-            // The relay switched on, or F1R3Ink arrived, after G3.
-            self.fund_relay(&sec)?;
+        }
+        // The relay's funding never fails the install: G7 and the relay's
+        // quarter-hourly check fund it again (spec v0.5 §11.7).
+        if g.relay_on() {
+            if let Err(e) = self.fund_relay(&sec) {
+                warn!("F1R3Ink's relay could not be funded yet: {e}");
+            }
         }
         let version = Self::configured_version(&self.manifest()?, &b);
         self.games_render(None, version)?;
@@ -249,7 +251,7 @@ impl Supervisor {
             })?;
         }
         // A game never registered here has no instances: its environment is
-        // replaced at the bundle's version without asking (spec v0.5 §10.9).
+        // replaced at the bundle's version without asking (spec v0.5 §11.9).
         for (id, v) in games::silent_upgrades(&self.manifest()?.games.unwrap(), &b) {
             self.games_stage(&format!("updating the {id} environment (never played here)"));
             self.job(
@@ -593,21 +595,27 @@ impl Supervisor {
         self.lock().relay_at = Some(Instant::now());
         let named = g.relay_current();
         let address = g.relay_address.clone();
+        // Nothing here fails F1R3Games: a problem is logged and tried again
+        // at the next check, and the state is recomputed either way.
         self.games_job("relay", move |s| {
+            let mut why = None;
             if !named {
                 if let Err(e) = s.games_name_relay(false) {
                     warn!("F1R3Ink's relay: {e}");
+                    why = Some(e);
                 }
             }
-            // An unreadable balance is left for the next check.
-            if let Ok(have) = s.observer()?.balance(&address) {
-                if have < dust(games::RELAY_LOW_F1R3) {
-                    let id = s.faucet_transfer(&address, dust(games::RELAY_F1R3) - have.max(0))?;
-                    info!("topped up F1R3Ink's relay to {} ({id})", crate::amounts::show(dust(games::RELAY_F1R3)));
-                }
+            match s.observer().and_then(|o| o.balance(&address)) {
+                Ok(have) if have < dust(games::RELAY_LOW_F1R3) => match s.faucet_transfer(&address, dust(games::RELAY_F1R3) - have.max(0)) {
+                    Ok(id) => info!("topped up F1R3Ink's relay to {} ({id})", crate::amounts::show(dust(games::RELAY_F1R3))),
+                    Err(e) => warn!("F1R3Ink's relay could not be topped up: {e}"),
+                },
+                Ok(_) => {}
+                Err(e) => warn!("F1R3Ink's relay balance: {e}"),
             }
-            let g = s.manifest()?.games.unwrap();
-            s.set_games(games_state(&g, None));
+            if let Ok(Some(g)) = s.manifest().map(|m| m.games) {
+                s.set_games(games_state(&g, why.as_deref()));
+            }
             Ok(())
         });
     }
@@ -618,7 +626,9 @@ impl Supervisor {
         let Some(g) = m.games.as_ref().filter(|g| m.options.games && g.breeder) else { return };
         {
             let x = self.lock();
-            if x.games != GamesState::Running || x.games_busy || x.busy || x.breeder_at.is_some_and(|t| t.elapsed() < BREEDER_EVERY) {
+            // Degraded only for want of the relay's naming still breeds.
+            let up = x.games == GamesState::Running || (matches!(x.games, GamesState::Degraded(_)) && g.pending_update.is_none());
+            if !up || x.games_busy || x.busy || x.breeder_at.is_some_and(|t| t.elapsed() < BREEDER_EVERY) {
                 return;
             }
         }

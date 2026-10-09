@@ -220,8 +220,12 @@ impl Supervisor {
         } else if role == Role::Portal {
             let sec = crate::games::load_or_create(&*self.secrets)?;
             let args = vec!["-c".to_string(), self.paths.games_conf().display().to_string(), "serve".to_string()];
-            // The relay's keys only when the portal's configuration runs it (spec v0.5 §10.8).
-            let relay = m.games.as_ref().is_some_and(|g| g.relay_on());
+            // The relay's keys exactly when the configuration the portal will
+            // read runs the relay (spec v0.5 §11.7): the file, not the setting,
+            // decides, so a setting saved while the file could not be rendered
+            // again never starts a portal that wants keys it was not given.
+            let relay = std::fs::read_to_string(self.paths.games_conf()).map(|t| crate::games::config_runs_relay(&t)).unwrap_or(false);
+            let _ = &m;
             (self.paths.games_bin.clone(), args, crate::games::env(&sec, crate::games::Grant { portal: true, relay, ..Default::default() }))
         } else {
             (self.paths.node_bin.clone(), procs::node_args(&self.paths, &m, &role)?, self.node_env(&role)?)

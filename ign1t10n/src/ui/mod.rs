@@ -108,7 +108,7 @@ pub fn menu(r: Option<&Report>) -> Vec<Entry> {
     if let Some(g) = r.and_then(|r| r.games.as_ref()) {
         v.push(Entry::Item("Open F1R3Games".into(), Action::OpenGames, games_up));
         // Each registered game: start a new instance, or browse its plays
-        // (spec v0.5 §11.1), in the default browser.
+        // (spec v0.5 §12.1), in the default browser.
         for x in g.games.iter().filter(|x| x.client && x.registered) {
             let name = display_name(&x.id);
             v.push(Entry::Item(format!("   New {name} game"), Action::OpenGamesAt(format!("/games/{}/launch", x.id)), games_up));

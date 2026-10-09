@@ -113,7 +113,7 @@ pub struct Games {
     pub nursery: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_epoch: Option<String>,
-    /// Run F1R3Ink's relay in the portal (spec v0.5 §10.8; default on, and on
+    /// Run F1R3Ink's relay in the portal (spec v0.5 §11.7; default on, and on
     /// for a schema-4 manifest written before the relay existed).
     #[serde(default = "yes")]
     pub relay: bool,
@@ -157,7 +157,7 @@ fn yes() -> bool {
     true
 }
 
-/// G1..G8 (spec v0.5 §10.4). From `funded` on they are cleared at reset.
+/// G1..G8 (spec v0.5 §11.4). From `funded` on they are cleared at reset.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct GamesStages {
     #[serde(default)] pub secrets: bool,

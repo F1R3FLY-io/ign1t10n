@@ -1,4 +1,4 @@
-//! F1R3Games (spec v0.5 §10): the portal service and the games' clients,
+//! F1R3Games (spec v0.5 §11): the portal service and the games' clients,
 //! served to any web browser at `http://localhost`, with the portal and game
 //! environments installed on the local shard, the games registered by a
 //! local stand-in for the F1R3FLY.io Cooperative, and F1R3Ink's relay run in
@@ -278,6 +278,11 @@ pub fn render_config(p: &Paths, g: &Games, validators: &[String], observer: &str
         t.insert("relay".into(), V::Table(r));
     }
     format!("# Rendered by ign1t10n at every start. Keys come from the environment.\n{}", toml::to_string_pretty(&t).unwrap())
+}
+
+/// Whether a rendered configuration runs the relay (its `[relay]` is enabled).
+pub fn config_runs_relay(text: &str) -> bool {
+    toml::from_str::<toml::Table>(text).ok().and_then(|t| t.get("relay")?.get("enabled")?.as_bool()).unwrap_or(false)
 }
 
 /// F1R3Games after a reset: keys and origins kept, nothing on the new chain yet.
@@ -592,6 +597,8 @@ mod tests {
         let t = render_config(&p, &g, &["http://127.0.0.1:40413".into()], "http://127.0.0.1:40453", "root", 1, true);
         let v: toml::Table = toml::from_str(&t).unwrap();
         assert_eq!(v["relay"]["enabled"].as_bool(), Some(true));
+        assert!(config_runs_relay(&t));
+        assert!(!config_runs_relay(&render_config(&p, &g, &["http://127.0.0.1:40413".into()], "http://127.0.0.1:40453", "root", 1, false)));
         assert_eq!(v["relay"]["base_url"].as_str().unwrap(), format!("http://localhost:{}/api/relay", g.portal_port));
         assert_eq!(v["origins"].as_array().unwrap().len(), 3);
         assert!(!t.contains("key_file") && !t.contains("secret"), "keys only from the environment: {t}");

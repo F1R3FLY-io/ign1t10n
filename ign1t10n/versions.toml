@@ -34,7 +34,7 @@ clients    = ["f1r3pix", "f1r3beat", "f1r3ink"]          # Decision 11: only gam
 # template's body changes: ign1t10n then asks before replacing it (it
 # discards that environment's on-chain state), unless the game was never
 # registered, in which case nobody can have played it and it is replaced
-# without asking (spec v0.5 §10.9). F1R3Ink is 2: its environment was
+# without asking (spec v0.5 §11.9). F1R3Ink is 2: its environment was
 # rewritten for design v1 (enter, visibility, sealed inks, the relay).
 env_version = 1
 game_versions = { f1r3pix = 1, f1r3beat = 1, f1r3ink = 2, f1r3sidechat = 1, f1r3skein = 1 }
