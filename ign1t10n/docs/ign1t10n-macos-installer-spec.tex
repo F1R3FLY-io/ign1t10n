@@ -59,11 +59,12 @@
 
 \title{\textbf{ign1t10n: macOS Installer Specification}\\[4pt]
 \large One install: a multi-validator \Nd{} shard, its observer, the \Gz{} browser,\\
-and the \Gm{} portal and games, served to any web browser\\[6pt]
-\normalsize Version 0.4 (draft for review)}
+and the \Gm{} portal, its playable games and F1R3Ink's relay,\\
+served to any web browser\\[6pt]
+\normalsize Version 0.5 (draft for review)}
 \author{Lucius Gregory Meredith\\
 \small CEO, F1R3FLY.io, and Chief Science Officer, F1R3FLY Industries}
-\date{7 October 2026}
+\date{9 October 2026}
 
 \begin{document}
 \maketitle
@@ -85,14 +86,56 @@ registration of the games by a local stand-in for the F1R3FLY.io Cooperative) is
 automated, resumable and recorded in the manifest, replacing the eleven manual steps
 the first live installs of 5 and 6 October needed.
 
-The specification is grounded in \Hr{} \code{main} at \code{46faa56} (the first
-working implementation of version 0.3), \Gm{} at \code{57a3b27} (branch
-\code{f1r3beat}, the portal with F1R3Pix and F1R3Beat), \Nd{} at \code{fce422a},
-\Gz{} at \code{f6ee26a}, and the \Gm{} portal, F1R3Pix and F1R3Beat design documents.
+Version 0.5 brings the install up to the \Gm{} that now supports game play end to
+end: F1R3Pix, F1R3Beat and, new, F1R3Ink are each installed \emph{playable}: client
+served, environment current, registered, and every administrative naming a game needs
+done on the chain. F1R3Ink's anonymous ink needs a \emph{relay}, a server-side party
+other than the inker that deploys anonymous inks in shuffled batches; \Svc{} now runs
+one, and \Hr{} supplies its keys, funds it, names it on the chain and keeps it named.
+From the menu bar the person can open the portal, start a new game of any registered
+game, or browse its gallery, in whatever web browser is the default.
+
+The specification is grounded in \Hr{} branch \code{f1r3games} at \code{3456f69} (the
+implementation of version 0.4, packaged as \code{ign1t10n-0.2.0}), \Gm{} at
+\code{d2381c6} (branch \code{f1r3ink-impl}: the portal with F1..F7 in tree, F1R3Pix,
+F1R3Beat, F1R3Ink and the relay), \Nd{} at \code{fce422a}, \Gz{} at \code{f6ee26a},
+and the \Gm{} portal, F1R3Pix, F1R3Beat and F1R3Ink design documents.
 \end{abstract}
 
 \tableofcontents
 \newpage
+
+%======================================================================
+\section{What changed in version 0.5}\label{sec:changes5}
+
+\begin{enumerate}[itemsep=2pt]
+\item \textbf{F1R3Ink is installed and registered} with its web client (gallery
+  renderers \code{round} and \code{flag}) at its own origin, \code{:40703}, reserved
+  for it since version 0.4. Its environment rises to version~2: design v1 rewrote it,
+  and installs of version 0.4 hold the old body at version~1
+  (Finding~\ref{f:inkenv}).
+\item \textbf{F1R3Ink's relay runs in the portal} (\S\ref{sec:relay}): a relay key
+  and a handle secret join \code{games.secrets}; the portal's configuration gains
+  \code{[relay]}; jobs get a configuration of their own without it
+  (Finding~\ref{f:relaykeys}); stage G7 names the relay on the chain with F1R3Ink's
+  key, and \Hr{} keeps it named and funded. Opening the portal moves to G8.
+\item \textbf{A game never registered here is upgraded without asking}
+  (\S\ref{sec:gupgrade}): no instance of it can exist, so replacing its environment
+  discards nothing anyone made. Consent is still asked for every registered game and
+  for the portal environment.
+\item \textbf{Every game is reachable from the menu bar}: ``New \textit{game}
+  game'' and ``\textit{game} gallery'' open \code{/games/<id>/launch} and
+  \code{/games/<id>/gallery} in the default browser; \code{ctl games open
+  [GAME [launch|gallery]]} does the same from a terminal.
+\item \textbf{The decisions of version 0.4 are resolved as implemented}
+  (\S\ref{sec:resolved4}), and version 0.4's work packages F1--F7 have landed in the
+  pinned \Gm{} revision. New: Findings~\ref{f:relay}--\ref{f:matches},
+  Principle~\ref{p:playable}, work packages F8--F10 and H10--H11, acceptance tests
+  A24--A29, and decisions~\ref{dec:relayon}--\ref{dec:anonmin}.
+\item \textbf{Defects of the version 0.4 implementation corrected}: F1R3Beat's key
+  signs \code{setBreeder} but was never funded, so naming the breeder could not pay
+  its phlo; it is now funded first, as F1R3Ink's key is before \code{setRelay}.
+\end{enumerate}
 
 %======================================================================
 \section{What changed in version 0.4}\label{sec:changes}
@@ -148,10 +191,11 @@ approving a background item in System Settings when macOS asks:
 \item \Gz{} deploys to a randomly selected active validator, reads from the observer,
   and is open in a window.
 \item The \Gm{} portal environment and the five game environments are installed on
-  the shard; F1R3Pix and F1R3Beat are registered; the portal answers at
+  the shard; F1R3Pix, F1R3Beat and F1R3Ink are registered and playable; F1R3Ink's
+  relay runs in the portal and is named on the chain; the portal answers at
   \code{http://localhost:40700} and has been opened in the default browser, where the
-  person can create a keystore, be funded by the faucet, launch a game, and browse its
-  gallery.
+  person can create a keystore, be funded by the faucet, launch a game, play it, and
+  browse each game's gallery.
 \item Every listening socket of every supervised process is bound to a loopback
   address.
 \item The shard and the portal survive logout, sleep and reboot, and come back with
@@ -170,8 +214,9 @@ More than ten validators; joining a remote or public shard; exposing the local s
 or the portal to the network (so invitations work for other browsers and other
 accounts on this Mac only); stake other than equal stakes; Intel Macs, Linux and
 Windows; Docker; running the \Gm{} portal \emph{inside} \Gz{} (it executes no
-JavaScript; \S\ref{sec:gazerendition}); web clients for F1R3Ink, F1R3SideChat and
-F1R3Skein, which do not exist yet; the F1R3Skein visionOS instrument.
+JavaScript; \S\ref{sec:gazerendition}); web clients for F1R3SideChat and F1R3Skein,
+which do not exist yet; the F1R3Skein visionOS instrument; a relay for any game but
+F1R3Ink, and a relay run apart from the portal (Decision~\ref{dec:relayproc}).
 
 \subsection{Pinned baselines}
 
@@ -181,12 +226,12 @@ F1R3Skein, which do not exist yet; the F1R3Skein visionOS instrument.
 \toprule
 Source & Revision & Notes\\
 \midrule
-\Hr{} & \code{main} @ \code{46faa56} & ``first working version'' of v0.3; \code{docs/IMPLEMENTATION.md} records its decisions, deviations and known issues\\
+\Hr{} & \code{f1r3games} @ \code{3456f69} & the implementation of v0.4 (on \code{main} @ \code{46faa56}, v0.3), packaged as \code{ign1t10n-0.2.0}; \code{docs/IMPLEMENTATION.md} records its decisions, deviations and known issues\\
 \Nd{} & \code{master} @ \code{fce422a} & crate \code{node} v0.4.46; toolchain \code{nightly-2026-02-09}; topology reference \code{docker/shard.yml}\\
 \Gz{} & \code{main} @ \code{f6ee26a} & release v0.1.0; crates \code{gaze-shard}, \code{gaze-wallet} reused by \Hr{}; renders HTML with Blitz and runs no JavaScript\\
 \Em{} & \code{28e50d4} & bundled as \code{Helpers/embers}; its contracts do not parse on \code{fce422a} (known issue)\\
-\Gm{} & \code{f1r3beat} @ \code{57a3b27} & \code{Portal/f1r3games-portal} (Rust workspace: \code{core}, \code{wallet}, \code{node}, \code{service}, \code{cli}, \code{games}, \code{rholint}; React shell in \code{web/}); \code{F1R3Pix/client}, \code{F1R3Beat/client}; to be re-pinned to \code{main} once merged\\
-Designs & 5--6 October 2026 & \Gm{} Portal design v0.1; F1R3Pix design v1; F1R3Beat design v2\\
+\Gm{} & \code{f1r3ink-impl} @ \code{d2381c6} & \code{Portal/f1r3games-portal} (Rust workspace: \code{core}, \code{wallet}, \code{node}, \code{service}, \code{cli}, \code{games}, \code{rholint}; React shell in \code{web/}); \code{F1R3Pix/client}, \code{F1R3Beat/client}, \code{F1R3Ink/client}; contains F1--F7 and the relay (F8); to be re-pinned to \code{main} once merged\\
+Designs & 5--8 October 2026 & \Gm{} Portal design v0.1; F1R3Pix design v1; F1R3Beat design v2; F1R3Ink design v1\\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -199,9 +244,12 @@ Designs & 5--6 October 2026 & \Gm{} Portal design v0.1; F1R3Pix design v1; F1R3B
 process together with the web shell it serves; ``the portal environment'' is the
 \code{games} environment it installs on the shard; ``a game environment'' is one
 game's contract. ``The local Cooperative'' is a key \Hr{} generates to stand in for
-the F1R3FLY.io Cooperative on this shard (Decision~\ref{dec:coop}). ``An origin''
-is a scheme, host and port, as browsers define it. Ports are written for the default
-allocation.
+the F1R3FLY.io Cooperative on this shard (Decision~\ref{dec:coop}). ``The relay''
+is F1R3Ink's relay as \Svc{} runs it; ``naming the relay'' is F1R3Ink's
+\code{setRelay}, by which the holder of F1R3Ink's key tells its environment which key
+may write anonymous stripes. A game is \emph{playable} when Principle~\ref{p:playable}
+holds for it. ``An origin'' is a scheme, host and port, as browsers define it. Ports
+are written for the default allocation.
 
 %======================================================================
 \section{Findings}\label{sec:findings}
@@ -325,10 +373,10 @@ only messages whose \code{event.origin} is the origin of the game's registered
 \code{GameFrame.tsx} refuses to frame a game served from the portal's own origin.
 A game client is a static Vite build (\code{base: "./"}) loaded as
 \code{<entry>?instance=<id>\&portal=<origin>}; its gallery renderers are
-\code{<entry>preview/<kind>.html}. F1R3Pix (renderer \code{canvas}) and F1R3Beat
-(\code{pattern}, \code{session}) have clients; F1R3Ink and F1R3SideChat have only
-environments; F1R3Skein's manifest lists \code{visionos} and \code{web} and has no web
-client.
+\code{<entry>preview/<kind>.html}. F1R3Pix (renderer \code{canvas}), F1R3Beat
+(\code{pattern}, \code{session}) and, at the pinned revision, F1R3Ink (\code{round},
+\code{flag}) have clients; F1R3SideChat has only an environment; F1R3Skein's manifest
+lists \code{visionos} and \code{web} and has no web client.
 \end{finding}
 
 \begin{finding}[Browser state belongs to an origin]\label{f:browserstate}
@@ -403,6 +451,54 @@ that program then answers some of the browser's requests: the same hazard versio
 0.3's implementation met with Docker's \code{*:p} listeners (\code{ports::port\_free}).
 \end{finding}
 
+\begin{finding}[F1R3Ink's anonymity needs a relay]\label{f:relay}
+On a public chain an ink is anonymous only if someone other than the inker deploys it
+(F1R3Ink design \S8, D2, D10). \Svc{} at \code{d2381c6} runs that relay when its
+configuration has \code{[relay] enabled = true}: \code{POST /api/relay/f1r3ink}
+accepts a request the shell signed with the player's key under the domain
+\code{f1r3games/relay/v1}, naming the game, the instance and the relay URL from the
+registered manifest; the relay checks the signature, that the URL is its own, that the
+signer plays the round, that the round allows anonymous ink and has at least its
+\code{anonMin} players (default five), and a per-player limit (30 requests an hour);
+it queues the ink under a \emph{handle}, an HMAC of the relay's secret, and once every
+\code{window\_blocks} blocks (three) deploys the window's inks as one shuffled
+\code{f1r3ink.relayInk}, signed by the relay key, which pays the phlo (at most
+5\,M phlo per batch of 64). \code{reveal} deploys \code{relayReveal} at once. The
+relay keeps nothing durable: a restart loses at most one window, which the inkers'
+clients report as never landed. The environment accepts \code{relayInk} and
+\code{relayReveal} only from the address F1R3Ink's own key named with
+\code{setRelay}; until then every relayed ink is refused. The relay learns who inks
+whom; it cannot read a sealed colour or forge an ink.
+\end{finding}
+
+\begin{finding}[The service loads the relay's keys for every subcommand]\label{f:relaykeys}
+\Svc{} reads \code{F1R3GAMES\_RELAY\_KEY} and \code{F1R3GAMES\_RELAY\_SECRET} (or the
+configured files) whenever the configuration it is given enables the relay, before it
+dispatches any subcommand, \code{bootstrap} and \code{games-install} included. A job
+run with the portal's configuration would therefore have to be handed the relay's
+keys, which no job needs.
+\end{finding}
+
+\begin{finding}[The manifest names the relay; registration does not compare it]\label{f:matches}
+\code{games-manifests --relay-base B} gives a game declaring the \code{relay}
+capability (F1R3Ink only) a manifest field \code{relay = B/<id>}; the shell posts
+only there, and refuses when the manifest has none. \code{register-games} treats a
+registered game as current when its status, id, entry, environment URI, capabilities,
+renderers and template hashes match, but not \code{relay}: a manifest that differs
+only in its relay is not registered again.
+\end{finding}
+
+\begin{finding}[F1R3Ink's environment was rewritten]\label{f:inkenv}
+F1R3Ink design v1 replaced the environment's methods (\code{enter}, \code{tags},
+\code{visibility}, \code{ink} with sealed inks, \code{veil}, \code{say},
+\code{close}; the relay's \code{setRelay}, \code{relayInk}, \code{relayReveal}; six
+reads). The version 0.4 bundle recorded F1R3Ink's environment at version~1, and \Hr{}
+0.2.0 installed the then-current body at version~1 on every chain, but registered
+nothing, F1R3Ink having no client: no instance of it exists on any \Hr{} shard. A game
+can be launched only once registered, so a game never registered has no state worth
+keeping.
+\end{finding}
+
 \begin{finding}[\Gz{} runs no JavaScript]\label{f:gazejs}
 \Gz{} renders HTML and CSS with Blitz and executes no JavaScript; behaviour is
 f1r3lang. The React shell therefore runs only in a stock browser. The shell is cut so
@@ -433,20 +529,21 @@ needs capabilities \Gz{} lacks today (allowances, \code{invite}, \code{open},
 \node[box, left=5mm of boot, fill=yellow!10] (vs) {validators $1..N$\\\scriptsize $2\le N\le 10$\\\scriptsize :40410, :40420, \ldots};
 \node[box, right=5mm of boot, fill=cyan!8] (obs) {observer\\\scriptsize read-only\\\scriptsize :40450};
 \node[box, right=8mm of obs, fill=black!3] (emb) {\Em{}\\\scriptsize optional\\\scriptsize :40600};
-\node[box, right=8mm of emb, fill=orange!12] (svc) {portal \code{f1r3games-service}\\\scriptsize \code{http://localhost:40700}\\\scriptsize F1R3Pix origin :40701\\\scriptsize F1R3Beat origin :40702};
+\node[box, right=8mm of emb, fill=orange!12] (svc) {portal \code{f1r3games-service}\\\scriptsize \code{http://localhost:40700}\\\scriptsize F1R3Pix :40701, F1R3Beat :40702\\\scriptsize F1R3Ink :40703\\\scriptsize F1R3Ink's relay (\code{/api/relay})};
 \draw[arr] (sup) -- node[lab]{spawns all} (boot);
 \draw[arr, <->] (boot) -- (vs);
 \draw[arr, <->] (boot) -- (obs);
 \node[grp, fit=(vs)(boot)(obs)(emb)(svc)(sup), label={[font=\scriptsize]above right:per-user, loopback only}] (g) {};
 \node[box, below=24mm of svc, fill=orange!5] (www) {any web browser\\\scriptsize Safari, Chrome, Firefox\\\scriptsize portal page + game frames\\\scriptsize WASM wallet signs in the page};
-\draw[arr, <->] (www) -- node[lab]{HTTP, same origin; frames from :40701, :40702} (svc);
+\draw[arr, <->] (www) -- node[lab]{HTTP, same origin; frames from :40701--:40703} (svc);
 \draw[arr] ($(svc.south west)+(0.3,0)$) |- node[lab, pos=0.75]{portal deploys to a random active validator} ($(vs.south)+(0,-1.1)$) -- (vs.south);
 \draw[arr, dashed] ($(svc.south west)+(0.9,0)$) |- node[lab, pos=0.7]{portal reads} ($(obs.south)+(0,-0.55)$) -- (obs.south);
 \draw[arr] (gaze.south) |- node[lab, pos=0.7]{deploys, reads} ($(vs.north)+(0,0.6)$) -- (vs.north);
 \end{tikzpicture}}
 \caption{What the installer lays down and what runs afterwards, with the defaults.
 Nodes speak the peer protocol to one another through the bootstrap. The browser
-reaches only the portal; the portal alone reaches the nodes.}
+reaches only the portal; the portal alone reaches the nodes. The relay is part of the
+portal process and deploys, like the rest of it, to an active validator.}
 \label{fig:arch}
 \end{figure}
 
@@ -463,10 +560,10 @@ Component & Role\\
 launch agent & \code{io.f1r3fly.ign1t10n.supervisor}; runs \code{ign1t10n supervise}, which owns every process below.\\
 bootstrap, validators, observer & \code{f1r3node run}, as in version 0.3 (\S\ref{sec:start}).\\
 \Em{} & Optional; deploys to one active validator, reads at the observer.\\
-portal & \Svc{} \code{serve}: the \Gm{} API and shell at \code{http://localhost:40700}, and each bundled game client at an origin of its own (F2); deploys to one active validator, reads at the observer.\\
-\Gm{} jobs & One-shot runs of \Svc{} for installation and registration (\S\ref{sec:gstages}) and, if enabled, the F1R3Beat breeder (\S\ref{sec:breeder}).\\
+portal & \Svc{} \code{serve}: the \Gm{} API and shell at \code{http://localhost:40700}, each bundled game client at an origin of its own (F2), and F1R3Ink's relay at \code{/api/relay/f1r3ink} (F8); deploys to an active validator drawn per deploy (F7), reads at the observer.\\
+\Gm{} jobs & One-shot runs of \Svc{} for installation and registration (\S\ref{sec:gstages}), of the \code{f1r3games} CLI to name F1R3Ink's relay (G7) and, if enabled, the F1R3Beat breeder (\S\ref{sec:breeder}).\\
 faucet & A key held by \Hr{}, never by a process, whose vault holds the undistributed genesis supply; funds joining validators, \Em{}, the portal, the local Cooperative and ``Fund a wallet''.\\
-local Cooperative & A key held by \Hr{}; the address rendered into the portal environment as \code{coop\_address}; signs only \code{games.register} and \code{games.retire}.\\
+local Cooperative & A key held by \Hr{}; the address rendered into the portal environment as \code{coop\_address}; signs only \code{games.register} and \code{games.retire}. \Hr{} also runs, as the Cooperative's stand-in, the relay the F1R3Ink design assigns to the Cooperative (D10).\\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -475,7 +572,8 @@ local Cooperative & A key held by \Hr{}; the address rendered into the portal en
 
 Version 0.3's principles stand: per-user and unprivileged at run time; loopback
 only; fresh secrets; one owner for the shard; a bonded validator runs; touch only
-what was created; idempotent, resumable operations. Version 0.4 adds three.
+what was created; idempotent, resumable operations. Version 0.4 adds three, and
+version 0.5 a fourth.
 
 \begin{principle}[Stable origins]\label{p:origin}
 The portal's origin, \code{http://localhost:}\textit{port}, is fixed when it is first
@@ -493,7 +591,18 @@ No page served by \Hr{} is given a node URL, and no node accepts a browser's req
 The portal's environment key and the games' keys are kept across resets and
 upgrades, so the environment URIs, and with them every pinned keystore and every
 manifest hash, survive a new chain (Finding~\ref{f:pin}). They change only when the
-person explicitly asks to rotate them.
+person explicitly asks to rotate them. The relay's key and handle secret are among
+them: handles are derived from the secret, so a kept secret keeps every inker's
+handle on a target stable across a restart of the portal.
+\end{principle}
+
+\begin{principle}[Listed means playable]\label{p:playable}
+A game is registered, and so listed in the portal, only when everything its play
+needs is in place: its client served at its origin; its environment at the bundled
+version; and every key-holder naming it requires done on the chain (F1R3Ink's relay;
+F1R3Beat's breeder when the breeder is on). What is not yet in place degrades
+\Gm{} with a reason and is retried; it never leaves a listed game that silently
+cannot do what its launch page offers.
 \end{principle}
 
 %======================================================================
@@ -557,6 +666,7 @@ ign1t10n.app/Contents/
       portal/                   web/dist: the shell, fonts, the wallet .wasm
       games/f1r3pix/            F1R3Pix/client/dist (index.html, preview/canvas.html)
       games/f1r3beat/           F1R3Beat/client/dist (index.html, preview/pattern.html, session.html)
+      games/f1r3ink/            F1R3Ink/client/dist (index.html, preview/round.html, flag.html)  (v0.5)
     uninstall.sh
 \end{lstlisting}
 
@@ -571,8 +681,9 @@ supervisor as \code{ign1t10n supervise}, and a client of the control socket as
 \code{ign1t10n ctl} \textit{verb}. Version 0.4 adds the verbs \code{games on|off},
 \code{games status [--json]}, \code{games reinstall}, \code{games open},
 \code{games env} (prints the portal URL and the variables that point the
-\code{f1r3games} CLI at it) and \code{games breeder on|off}. The control socket is
-\code{run/control.sock}, one JSON object per line, peer uid checked.
+\code{f1r3games} CLI at it) and \code{games breeder on|off}; version 0.5 adds
+\code{games relay on|off} and \code{games open [GAME [launch|gallery]]}. The control
+socket is \code{run/control.sock}, one JSON object per line, peer uid checked.
 
 \subsection{The launch agent}
 
@@ -592,7 +703,8 @@ unsuccessful exit; \code{ExitTimeOut} covers the ordered shutdown.
   shard.toml                    the manifest (Appendix B), schema 4
   keys/  genesis/  conf/  nodes/  run/  archive/    as in version 0.3
   games/                                                                 (new)
-    f1r3games.toml              the portal's configuration (Appendix A.2)
+    f1r3games.toml              the portal's configuration (Appendix A.2), with [relay]
+    f1r3games-jobs.toml         the same without [relay], for jobs (v0.5)
     manifests/<id>.json         each game's manifest as registered
     cli/                        F1R3GAMES_HOME for jobs that need the CLI
 ~/Library/Logs/F1R3FLY/ign1t10n/
@@ -606,8 +718,9 @@ Node and faucet keys are as in version 0.3: encrypted PKCS\#8 PEMs, each with it
 random password in a Keychain item of service \code{io.f1r3fly.ign1t10n}, account
 \code{pem.}\textit{name}; \Em{}'s secrets in \code{embers.secrets}. \Gm{} adds one
 item, \code{games.secrets}, a JSON object holding the service key, the environment
-key, the token secret, one environment key per game, the local Cooperative's key and
-the breeder's key. Its access control list is \Hr{}'s designated requirement. A key
+key, the token secret, one environment key per game, the local Cooperative's key, the
+breeder's key and, since version 0.5, the relay's key and its 32-byte handle secret
+(created on first use when an older install's item lacks them). Its access control list is \Hr{}'s designated requirement. A key
 reaches a \Gm{} process only in that process's own environment, and only the keys the
 process needs (\S\ref{sec:gkeys}).
 
@@ -647,21 +760,23 @@ count (default 2), ``Bundle \Em{}'' (default on), ``Install \Gm{}'' (default on)
 \end{description}
 
 \noindent
-When \Gm{} is chosen, the supervisor continues with stages G1--G7
+When \Gm{} is chosen, the supervisor continues with stages G1--G8
 (\S\ref{sec:gstages}) once the shard is \code{Running}, and the first-run window lists
-them below S9. A failure in G1--G7 leaves the shard \code{Running} and \Gm{}
-\code{Failed}; it never undoes S0--S9.
+them below S9. A failure in G1--G6 leaves the shard \code{Running} and \Gm{}
+\code{Failed}; a failure in G7 leaves \Gm{} \code{Degraded} (the games play; only
+anonymous ink waits); neither undoes S0--S9.
 
 \subsection{Budgets}\label{sec:budget}
 
 Targets on an M-series Mac with $N_0 = 2$: S0--S6 under 10\,s of machine time; genesis
-under 120\,s; observer join under 180\,s; G1--G7 under 180\,s (six environment
-deploys and two registrations, each waited to finalisation, about one block each);
+under 120\,s; observer join under 180\,s; G1--G8 under 200\,s (six environment
+deploys, three registrations and \code{setRelay}, each waited to finalisation, about
+one block each);
 whole first run under seven minutes. $M_{\min}$ and $D_{\min}$ add the measured
 footprint of \Em{} and of the portal (a placeholder of 150\,MB each until T1 measures
 it). Plays are stored on chain, so disk grows with play: T2 measures the growth per
-published F1R3Pix canvas and F1R3Beat session across the $N+2$ data directories, and
-the panel shows it.
+published F1R3Pix canvas, F1R3Beat session and F1R3Ink round across the $N+2$ data
+directories, and the panel shows it.
 
 %======================================================================
 \section{Supervision}\label{sec:supervise}
@@ -771,19 +886,23 @@ portal takes the whole list and needs no restart.
 \toprule
 Process & Command & Purpose\\
 \midrule
-portal & \code{f1r3games-service serve} & API and shell at \code{http://localhost:40700}; F1R3Pix at \code{http://localhost:40701}, F1R3Beat at \code{http://localhost:40702} (F2); faucet on\\
+portal & \code{f1r3games-service serve} & API and shell at \code{http://localhost:40700}; F1R3Pix at \code{:40701}, F1R3Beat at \code{:40702}, F1R3Ink at \code{:40703} (F2); faucet on; F1R3Ink's relay at \code{/api/relay/f1r3ink} unless switched off (F8)\\
 install job & \code{bootstrap}; \code{games-install} & G4, G5; upgrades\\
-register job & \code{games-manifests}; \code{register-games} (F3) & G6; re-registration\\
-breeder job & \code{beat-epoch} (F6) & optional, daily (\S\ref{sec:breeder})\\
+register job & \code{games-manifests --relay-base}; \code{register-games} (F3) & G6; re-registration\\
+relay job & \code{f1r3games ink set-relay} (F8) & G7; again after a reset or a new F1R3Ink environment\\
+breeder job & \code{f1r3games beat \ldots} (F6) & optional, daily (\S\ref{sec:breeder})\\
 \bottomrule
 \end{tabularx}
 \end{center}
 
 \noindent
-Only the portal is long-lived. Jobs are run by the supervisor one at a time, with the
-portal's configuration, logged to \code{games-job.log}, and recorded in
+Only the portal is long-lived; the relay lives inside it (Decision~\ref{dec:relayproc}).
+Jobs are run by the supervisor one at a time, with the jobs' configuration
+\code{games/f1r3games-jobs.toml}, which is the portal's without \code{[relay]}
+(Finding~\ref{f:relaykeys}), logged to \code{games-job.log}, and recorded in
 \code{shard.toml} before and after, so an interrupted job is re-run (every job is
-idempotent: each probes the chain before it deploys, Finding~\ref{f:order}).
+idempotent: each probes the chain before it deploys, Finding~\ref{f:order}; naming the
+relay twice names the same key).
 
 \subsection{Origins and ports}\label{sec:gports}
 
@@ -796,15 +915,17 @@ Origin & Port & Serves & Manifest \code{entry}\\
 portal & 40700 & \code{/api}, the shell & ---\\
 F1R3Pix & 40701 & \code{/f1r3pix/} & \code{http://localhost:40701/f1r3pix/}\\
 F1R3Beat & 40702 & \code{/f1r3beat/} & \code{http://localhost:40702/f1r3beat/}\\
-Ink, SideChat, Skein & 40703--40705 & reserved & not yet registered\\
+F1R3Ink & 40703 & \code{/f1r3ink/} & \code{http://localhost:40703/f1r3ink/}\\
+SideChat, Skein & 40704--40705 & reserved & not yet registered\\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \begin{requirement}[The host is \code{localhost}]
-Every URL \Hr{} writes for the portal or a game (manifest entries,
-\code{portal\_base\_url}, the menu's ``Open \Gm{}'', ``Copy \Gm{} address'') \MUST{}
-use the host \code{localhost}. The portal \MUST{} redirect a request whose
+Every URL \Hr{} writes for the portal or a game (manifest entries, the relay's
+\code{base\_url} and the manifests' \code{relay}, \code{portal\_base\_url}, the
+menu's ``Open \Gm{}'', ``New \ldots{} game'' and ``\ldots{} gallery'', ``Copy \Gm{}
+address'') \MUST{} use the host \code{localhost}. The portal \MUST{} redirect a request whose
 \code{Host} is \code{127.0.0.1:}\textit{p} or \code{[::1]:}\textit{p} to
 \code{http://localhost:}\textit{p} (308) and \MUST{} refuse any other \code{Host}
 (421), which also defeats DNS rebinding (F4).
@@ -814,6 +935,13 @@ use the host \code{localhost}. The portal \MUST{} redirect a request whose
 The portal and every game origin \MUST{} listen on \code{127.0.0.1} and on
 \code{::1} at the same port (F4); a port is allocated only if it is free on both
 (Finding~\ref{f:dualstack}). Nothing listens on any other address.
+\end{requirement}
+
+\begin{requirement}[The relay is same-origin with the shell]
+The relay's URL \MUST{} be the portal's origin followed by
+\code{/api/relay/f1r3ink}: the shell posts to it from that origin, so no CORS origin is needed and none is
+configured (\code{cors\_origins = []}). A game client never reaches the relay; it asks
+the shell through the host protocol's \code{relay} capability.
 \end{requirement}
 
 \begin{requirement}[One origin per game]
@@ -842,19 +970,20 @@ Key & Funded with & Given to\\
 service key & 1\,000\,000 F1R3 & portal (\code{F1R3GAMES\_SERVICE\_KEY}); install job; register job (pays)\\
 environment key & --- & portal (\code{F1R3GAMES\_ENV\_KEY}); install job\\
 token secret & --- & portal (\code{F1R3GAMES\_TOKEN\_SECRET})\\
-game keys (5) & --- & install job and register job only (\code{F1R3GAMES\_GAME\_KEY\_<ID>}); F1R3Beat's also to the breeder job once, for \code{setBreeder}\\
+game keys (5) & F1R3Ink's and F1R3Beat's 10 F1R3, before they sign & install job and register job (\code{F1R3GAMES\_GAME\_KEY\_<ID>}); F1R3Ink's to the relay job, for \code{setRelay}; F1R3Beat's to the breeder job once, for \code{setBreeder}\\
 local Cooperative & 1\,000 F1R3 & register job only (\code{F1R3GAMES\_COOP\_KEY})\\
-breeder & 1\,000 F1R3 & breeder job only (\code{F1R3GAMES\_BREEDER\_KEY})\\
+breeder & 1\,000 F1R3 & breeder job only\\
+relay key & 1\,000 F1R3, topped up below 100 & portal only, when the relay runs (\code{F1R3GAMES\_RELAY\_KEY})\\
+relay handle secret & --- & portal only, when the relay runs (\code{F1R3GAMES\_RELAY\_SECRET})\\
 \bottomrule
 \end{tabularx}
 \end{center}
 
 \noindent
-All six kinds live in \code{games.secrets} and reach a process only in its
-environment (F1). Until F1 lands, \Hr{} writes the key files a command needs into a
-fresh \code{0700} directory under \code{run/}, passes their paths, waits until the
-process reports ready (the service reads its keys once, at start), and deletes the
-directory; the paths never appear in an argument vector except as file names.
+All eight kinds live in \code{games.secrets} and reach a process only in its
+environment (F1, which has landed); the CLI receives the one key it signs with as
+\code{F1R3GAMES\_KEY}. No key is written to a file, an argument vector or a
+configuration.
 
 \subsection{Installation on the chain}\label{sec:gstages}
 
@@ -868,9 +997,11 @@ at its first incomplete step.
   derivation).
 \item[G2 ports] Allocate the portal's and the bundled games' ports
   (\S\ref{sec:gports}) unless already recorded.
-\item[G3 fund] Faucet transfers to the service key, the local Cooperative and (if
-  the breeder is on) the breeder; wait until each is finalised at the observer.
-  Skipped for an address whose balance already covers its amount.
+\item[G3 fund] Faucet transfers to the service key, the local Cooperative, (if
+  the breeder is on) the breeder and (if the relay runs) the relay key and F1R3Ink's
+  key; wait until each is finalised. Skipped for an address whose balance already
+  covers its amount; re-checked for the relay whenever it comes on or F1R3Ink
+  arrives after G3.
 \item[G4 configure and install the portal environment] Render
   \code{games/f1r3games.toml} (Appendix A.2) with a randomly selected active
   validator; run the install job's \code{bootstrap}; wait until the \code{env.probe}
@@ -879,16 +1010,26 @@ at its first incomplete step.
 \item[G5 install the game environments] \code{games-install --version V} with the
   versions from \code{Resources/f1r3games/games.toml}; wait until each game's probe
   reports its version. All five environments are installed, so registering a game
-  whose client arrives later needs no deploy but the registration.
+  whose client arrives later needs no deploy but the registration, unless its
+  environment version rose meanwhile, which G5 then applies without asking
+  (\S\ref{sec:gupgrade}).
 \item[G6 register] For each game whose client is bundled: render its manifest with
-  its own origin as entry (F3, or one \code{games-manifests} run per game until F3);
-  compare with \code{manifests/<id>.json} and with \code{GET /api/games/<id>}; if the
-  game is absent or its template hashes or entry differ, sign \code{games.register}
-  with the local Cooperative's key and wait until \code{/api/games} lists it with the
-  same hashes. Save the manifest.
-\item[G7 open] Start the portal (\S\ref{sec:start}); when it is ready and the person
-  chose ``Open \Gm{} when ready'' at first run, \code{open http://localhost:40700/}
-  in the default browser. Only at first run; later starts open nothing.
+  its own origin as entry (F3) and, for F1R3Ink, \code{--relay-base
+  http://localhost:40700/api/relay} (F8); compare its SHA-256 with the one recorded in
+  \code{shard.toml}; if the game is not registered or the hash differs, sign
+  \code{games.register} with the local Cooperative's key and wait until
+  \code{/api/games} lists it as given. Save the manifests. Then start the portal
+  (\S\ref{sec:start}) and wait for \code{/api/ready?games=\ldots}.
+\item[G7 name the relay] When the relay runs (\S\ref{sec:relay}) and \code{shard.toml}
+  does not record it as named for F1R3Ink's current environment version: fund F1R3Ink's
+  key if short; run \code{f1r3games -y ink set-relay <relay address>} with F1R3Ink's key
+  as \code{F1R3GAMES\_KEY} against the portal; wait until the deploy is finalised;
+  record \code{relay\_named = <F1R3Ink environment version>}. On failure, \Gm{} is
+  \code{Degraded} (``F1R3Ink's relay is not named on the chain yet'') and G7 is retried
+  every 15 minutes.
+\item[G8 open] When the portal is ready and the person chose ``Open \Gm{} when
+  ready'' at first run, \code{open http://localhost:40700/} in the default browser.
+  Only at first run; later starts open nothing.
 \end{description}
 
 \subsection{Health}\label{sec:ghealth}
@@ -899,7 +1040,11 @@ one, and every game recorded as registered is listed with the recorded hashes. U
 F5, the supervisor checks \code{GET /api/env} (the URI equals the recorded one) and
 \code{GET /api/games} (each recorded game present). \Gm{} is \code{Degraded} when the
 portal is ready but the observer trails or a game's hashes differ from the bundle's
-(an upgrade is pending), and \code{Waiting} whenever the shard is not \code{Running}.
+(an upgrade is pending), or when the relay runs but is not named for F1R3Ink's
+current environment (G7 failed; retried every 15 minutes), and \code{Waiting} whenever
+the shard is not \code{Running}. Every 15 minutes the supervisor also reads the relay
+key's balance at the observer and, below 100~F1R3, tops it up to 1\,000~F1R3 from the
+faucet.
 
 \subsection{What the person does in the browser}\label{sec:journey}
 
@@ -909,29 +1054,76 @@ portal is ready but the observer trails or a game's hashes differ from the bundl
   portable format \Gz{} and F1R3Sky use, so the person's \Gz{} wallet key can be
   brought in). The page pins the portal environment URI and asks the faucet to fund
   the new address with 100~F1R3 (Decision~\ref{dec:faucet}).
-\item \code{/games}: F1R3Pix and F1R3Beat, from \code{games.register}.
+\item \code{/games}: F1R3Pix, F1R3Beat and F1R3Ink, from \code{games.register}. The
+  menu bar's ``New \textit{game} game'' and ``\textit{game} gallery'' open the next two
+  pages directly.
 \item \code{/games/:id/launch}: a new instance, unlisted by default, with the game's
   configuration (F1R3Pix: capacity 61, random seating; F1R3Beat: 4/4, two bars,
-  sixteenths, capacity 32, 100\,bpm). The launch sets an allowance so moves are signed
-  without a prompt; payments are always prompted.
+  sixteenths, capacity 32, 100\,bpm; F1R3Ink: a palette, decay, attribution and
+  ``Allow anonymous ink'', which needs the relay and at least \code{anonMin} players
+  in the round). The launch sets an allowance so moves, and requests to the relay, are
+  signed without a prompt; payments are always prompted.
 \item \code{/instances/:id}: the lobby; invite (a link at \code{localhost}, useful to
   other browsers and other accounts on this Mac), start, play in the framed client.
 \item \code{/games/:id/gallery}: plays by kind and day, each previewed by the game's
-  renderer from the game's own origin; \code{/plays/:id} opens one.
+  renderer from the game's own origin (F1R3Ink: rounds, and portraits of single
+  flags); \code{/plays/:id} opens one.
 \end{enumerate}
 
 \noindent
 \Hr{} touches none of this; it guarantees only that the portal, its origins, the
 environments and the registrations are there.
 
+\subsection{F1R3Ink's relay}\label{sec:relay}
+
+The relay is on by default (Decision~\ref{dec:relayon}) and runs when it is on and
+F1R3Ink's client is bundled. It is part of the portal: \Hr{} renders
+\code{[relay]} into \code{games/f1r3games.toml},
+
+\begin{lstlisting}[language=Conf]
+[relay]
+enabled       = true
+base_url      = "http://localhost:40700/api/relay"   # what F1R3Ink's manifest names
+window_blocks = 3                                     # one batch per three blocks
+per_hour      = 30                                    # relayed requests per player
+# key and handle secret: F1R3GAMES_RELAY_KEY, F1R3GAMES_RELAY_SECRET (portal only)
+\end{lstlisting}
+
+\noindent
+and starts the portal with the relay's two secrets in its environment. The jobs'
+configuration never has the table. Life cycle:
+
+\begin{itemize}[nosep]
+\item \emph{Naming}. G7 names the relay for F1R3Ink's environment version and
+  records the version. A reset (a new chain) or a new F1R3Ink environment (an
+  upgrade, which re-initialises its state) makes the record stale, and G7 names it
+  again; ``Reinstall'' names it again regardless, as a rotation of the \Gm{} keys
+  (not yet implemented) must. Nothing else does: switching the relay off and on, a
+  portal restart and a move to new ports keep it named.
+\item \emph{Funding}. The relay pays for every batch and every reveal. It is funded
+  with 1\,000~F1R3 at G3 and topped up below 100~F1R3; at the limit of 30 requests a
+  player an hour and at most $5\times10^6$ phlo (0.05~F1R3) per batch, that is
+  thousands of batches before a top-up.
+\item \emph{Off}. \code{ctl games relay off} (or the panel) restarts the portal
+  without \code{[relay]} and without the relay's keys. F1R3Ink stays registered and
+  its manifest still names the relay's URL (Decision~\ref{dec:relayurl}); the portal
+  answers that it runs no relay (404), and the shell reports anonymous ink as
+  unavailable. Inks in the clear, sealed inks and everything else in F1R3Ink are
+  unaffected. \code{on} restarts it with the relay, funding and naming it if needed.
+\item \emph{What it knows}. The relay learns who inks whom in anonymous rounds; that
+  is the trust the F1R3Ink design places in the Cooperative (D10). On the local
+  shard the stand-in is \Hr{}, on the person's own Mac, and the queue is in memory
+  only.
+\end{itemize}
+
 \subsection{The F1R3Beat breeder (optional)}\label{sec:breeder}
 
 F1R3Beat's patterns breed in epochs run by a breeder key that F1R3Beat's environment
 key has named (F1R3Beat design v2 \S10). When ``Run the F1R3Beat breeder daily'' is
-on (Decision~\ref{dec:breeder}), \Hr{} once signs \code{setBreeder} with F1R3Beat's
-game key, launches a public nursery instance with the breeder's key, records its id,
-and then runs the breeder job (\code{beat-epoch}, F6) once a day while the shard runs,
-skipping an epoch when nothing has been published since the last.
+on (Decision~\ref{dec:breeder}), \Hr{} once funds F1R3Beat's game key, signs
+\code{setBreeder} with it (\code{f1r3games beat set-breeder}), launches a public
+nursery instance with the breeder's key, records its id, and then runs one epoch
+(\code{f1r3games beat epoch}, F6) once a day while the shard runs.
 
 \subsection{Upgrade}\label{sec:gupgrade}
 
@@ -940,10 +1132,18 @@ At start, the supervisor compares \code{Resources/f1r3games/games.toml} with wha
 
 \begin{itemize}[nosep]
 \item a client-only change: nothing to do; the new bundle's files are served;
-\item a game's template hashes or environment version changed: run G5 for that game
-  at the recorded version $+1$ and G6, \emph{after consent}, since its live instances
-  are replaced (Finding~\ref{f:upgrade}); until then the game stays registered at the
-  old hashes and \Gm{} is \code{Degraded} (``F1R3Beat update waiting'');
+\item a \emph{registered} game's environment version rose: run G5 for that game at
+  the bundled version and G6, \emph{after consent}, since its live instances are
+  replaced (Finding~\ref{f:upgrade}); until then the game stays registered at the old
+  hashes and \Gm{} is \code{Degraded} (``F1R3Beat update waiting'');
+\item a game \emph{never registered on this chain} whose environment version rose:
+  run G5 for it at the bundled version \emph{without asking}, since no instance of it
+  can exist (Finding~\ref{f:inkenv}), then G6 if its client is now bundled. This is
+  how a version 0.4 install meets F1R3Ink: environment 1 $\to$ 2, then registration
+  and G7, with no dialog;
+\item a game's template hashes changed with its environment version unchanged: G6
+  re-registers it (the manifest's hash differs), without consent: its environment and
+  instances are untouched;
 \item the portal environment's version rose: the same, with a dialog saying that
   profiles, instances, plays, invitations and sponsorships on the local shard will be
   discarded; browser keystores are unaffected (the URI is unchanged).
@@ -972,8 +1172,10 @@ A monochrome template image of the F1R3FLY.io firefly with a status dot: none fo
 Item & Action\\
 \midrule
 \textit{Local shard: Running, 2 validators} & submenu: height, per-node readiness, observer lag, disk\\
-\textit{F1R3Games: Running, 2 games} & submenu: portal address, each game and its origin, last job, breeder\\
+\textit{F1R3Games: Running, 3 games} & portal address, each game and its origin, the relay (running, named), last job, breeder\\
 Open F1R3Games & \code{open http://localhost:40700/} in the default browser\\
+\quad New \textit{game} game & for each registered game, its launch page \code{/games/<id>/launch} in the default browser\\
+\quad \textit{game} gallery & for each registered game, its gallery \code{/games/<id>/gallery} in the default browser\\
 Open F1R3Gaze & \code{open -b io.f1r3fly.f1r3gaze}\\
 Start / Stop shard & through the control socket\\
 Configure\ldots\ (Command-comma) & the configuration panel\\
@@ -1003,6 +1205,8 @@ local shard in \Gz{}, ports, genesis amounts, \Em{} on/off). A third pane is new
   not, client bundled or not, pending update with ``Update\ldots''.
 \item \textbf{Faucet amount} for new portal keys (default 100~F1R3).
 \item \textbf{Run the F1R3Beat breeder daily} (default off) with the last epoch.
+\item \textbf{Run F1R3Ink's relay} (default on; \code{ctl games relay on|off}), with
+  the relay's address, whether it is named on the chain, and its balance.
 \item \textbf{Reinstall} (re-runs G3--G6; nothing is deployed that is already there)
   and \textbf{Rotate \Gm{} keys\ldots} (danger: new environment URIs; every browser
   keystore must be cleared, every game re-registered).
@@ -1010,10 +1214,11 @@ local shard in \Gz{}, ports, genesis amounts, \Em{} on/off). A third pane is new
 
 \subsection{First-run window}
 F1R3FLY.io brand on a white surface (white-background logo; yellow and sky only as
-rules and progress), listing S0--S9 and then G1--G7, each with a spinner, check or
+rules and progress), listing S0--S9 and then G1--G8, each with a spinner, check or
 error, and the ``Advanced'' disclosure of \S\ref{sec:prov}. It closes with a summary:
 shard id, validators, the funded \Gz{} wallet, the portal address with an
-``Open \Gm{}'' button, and where the logs are.
+``Open \Gm{}'' button and one ``Play'' link per registered game, and where the logs
+are.
 
 %======================================================================
 \section{Required changes}\label{sec:wp}
@@ -1031,6 +1236,9 @@ number) and N5 (\code{api-server.reject-foreign-origin}) are unchanged
 (Finding~\ref{f:nonode}).
 
 \subsection{\Gm{}}\label{sec:fwp}
+
+F1--F7 below are version 0.4's; all seven have landed and are in the pinned revision
+\code{d2381c6}. F8 landed with F1R3Ink's implementation; F9 and F10 are new requests.
 
 \begin{workpackage}[F1: keys from the environment]\label{wp:f1}
 \Svc{} reads \code{F1R3GAMES\_SERVICE\_KEY}, \code{F1R3GAMES\_ENV\_KEY},
@@ -1081,6 +1289,29 @@ refuses, so the portal survives a validator's restart and needs no restart when 
 withdraws. Estimate: 0.25 engineer-week.
 \end{workpackage}
 
+\begin{workpackage}[F8: F1R3Ink's relay (landed)]\label{wp:f8}
+\code{[relay]} in the configuration; \code{POST /api/relay/\{game\}};
+\code{relay-keygen}; \code{games-manifests --relay-base}; \code{f1r3games ink
+set-relay}; the shell's \code{relay} capability (Finding~\ref{f:relay}). Landed at
+\code{d2381c6}.
+\end{workpackage}
+
+\begin{workpackage}[F9: compare the relay at registration]\label{wp:f9}
+\code{register::matches} also compares \code{relay}, so a manifest that changes only
+its relay is registered again (Finding~\ref{f:matches}). With F9, \Hr{} could
+register F1R3Ink without \code{relay} while the relay is off, and the shell would say
+so before a round is launched, rather than at the first anonymous ink. Estimate: 0.1
+engineer-week.
+\end{workpackage}
+
+\begin{workpackage}[F10: load the relay only to serve, and report it]\label{wp:f10}
+Read the relay's keys only for \code{serve} (Finding~\ref{f:relaykeys}), so one
+configuration serves the portal and the jobs; and report the relay in
+\code{GET /api/ready} and \code{status --json} (its address, whether the chain names
+it, its queue and its last batch), so readiness can include it without \Hr{}
+recording the naming itself. Estimate: 0.25 engineer-week.
+\end{workpackage}
+
 %======================================================================
 \section{Security model}\label{sec:security}
 
@@ -1097,6 +1328,7 @@ Pages in other browsers or tabs & Cannot use a node (N5). Can reach the portal's
 A malicious or buggy game & Own origin and sandbox; the host answers only that frame and that origin; the wallet signs only the game's registered play templates within the launch allowance, refuses fund-moving templates from a game, and prompts for payments (\Gm{} design).\\
 Theft of a browser keystore & Encrypted under the passphrase (PBKDF2) or the passkey's PRF output; it never leaves the browser profile; \Hr{} never reads it.\\
 The local Cooperative key & Governs only the registry of this local shard; it is never given to the portal process.\\
+F1R3Ink's relay & Its key and handle secret are only in the portal's environment, never in a job's or a file; it can write only anonymous stripes in F1R3Ink rounds, for players whose signed requests it checked, at most 30 an hour each, and spends only its own balance (topped up to 1\,000~F1R3). It learns who inks whom (D10); on this shard that is the person's own Mac. Another account on the Mac can use it as any player can.\\
 Tampered artifact & Developer ID signatures on every Mach-O and the archive; notarisation; hardened runtime with no entitlements; clients served from inside the signed bundle; GPG-signed \code{SHA256SUMS}.\\
 Malware running as the user & Not defended.\\
 \bottomrule
@@ -1114,8 +1346,8 @@ shard; then it runs \S\ref{sec:gupgrade} for \Gm{}.
 \subsection{Reset}\label{sec:reset}
 ``Reset shard\ldots'' archives the chain, node keys and configurations and
 re-provisions from S1 with the chosen $N_0$. \code{games.secrets} is kept, so the
-environment URIs are the same; G3--G6 run again on the new chain, and the portal's
-origin is the same. The dialog says that every deploy, registry entry, balance,
+environment URIs are the same; G3--G7 run again on the new chain (the relay is named
+again), and the portal's origin is the same. The dialog says that every deploy, registry entry, balance,
 profile, instance, play and gallery on the local shard will be gone; that \Gz{}
 wallets and browser keystores keep their keys and can sign on again at once; and that
 the faucet will fund them again. A checkbox ``Also rotate the \Gm{} keys'' (off) does
@@ -1140,12 +1372,11 @@ the bundle:
 \begin{lstlisting}[language=Conf]
 [f1r3games]
 repository = "https://github.com/F1R3FLY-io/F1R3Games"
-revision   = "57a3b2796108f90dd4689abf33659a34c351d2ef"   # branch f1r3beat; main once merged
-toolchain  = "stable"                                      # Rust >= 1.85
-node       = "22"                                          # npm ci for web/ and the clients
-clients    = ["f1r3pix", "f1r3beat"]                       # Decision 11
-# F1R3Games work packages this revision contains (F1..F7).
-has = []
+revision   = "d2381c668e0ac4fddc1031c04b90c4f335c540c1"   # branch f1r3ink-impl; main once merged
+clients    = ["f1r3pix", "f1r3beat", "f1r3ink"]            # Decision 11
+env_version = 1                                            # the portal environment
+game_versions = { f1r3pix = 1, f1r3beat = 1, f1r3ink = 2, f1r3sidechat = 1, f1r3skein = 1 }
+has = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"]
 \end{lstlisting}
 
 \begin{center}\small
@@ -1157,10 +1388,10 @@ Job & Runner & Steps\\
 \code{node} & \code{macos-14} & \Nd{} at the pinned revision, \code{--features crypto/vendored-openssl}, arm64; \code{otool -L} gate\\
 \code{embers} & \code{macos-14} & \Em{} at the pinned revision, arm64\\
 \code{gaze} & \code{ubuntu} & download and verify the pinned \Gz{} release\\
-\code{games} (new) & \code{macos-14} & \Gm{} at the pinned revision: \code{cargo test} for the workspace and \code{rholint}; \code{cargo build --release -p f1r3games-service -p f1r3games-cli}, arm64; \code{web/}: \code{npm ci}, build the wallet to WebAssembly (\code{wasm32-unknown-unknown}, \code{wasm-bindgen} 0.2.129), \code{npm test}, \code{npm run build}; each listed client: \code{npm ci}, \code{npm test}, \code{npm run build}; write \code{games.toml} (environment versions and template hashes from \code{games-manifests}); \code{otool -L} gate\\
-\code{ign1t10n} & \code{macos-14} & build, unit and end-to-end tests (the stand-in node gains a stand-in portal)\\
+\code{games} (new) & \code{macos-14} & \Gm{} at the pinned revision: \code{cargo test} for the workspace and \code{rholint}; \code{cargo build --release -p f1r3games-service -p f1r3games-cli}, arm64; \code{web/}: \code{npm ci}, build the wallet to WebAssembly (\code{wasm32-unknown-unknown}, \code{wasm-bindgen} 0.2.129), \code{npm test}, \code{npm run build}; each listed client: \code{npm ci}, \code{npm test}, \code{npm run build}, and a renderer \code{preview/<kind>.html} for each gallery kind its game declares; write \code{games.toml}; \code{otool -L} gate\\
+\code{ign1t10n} & \code{macos-14} & build, unit and end-to-end tests (the real \Svc{} and \code{f1r3games} CLI against the stand-in node)\\
 \code{assemble} & \code{macos-14} & \code{build.sh} with the \Gm{} artifacts; sign inside out (\code{Helpers/*}, \code{MacOS/ign1t10n}, the app); \code{pkgbuild}, \code{productbuild}, sign, notarise, staple\\
-\code{smoke} & \code{macos-14} & headless provisioning with \Gm{} on; A2--A6, A11, A12, A15, A17, A23; A16 in headless Chromium and WebKit\\
+\code{smoke} & \code{macos-14} & headless provisioning with \Gm{} on; A2--A6, A11, A12, A15, A17, A23, A24, A25; A16 and A28 in headless Chromium and WebKit\\
 \code{publish} & \code{ubuntu} & \code{SHA256SUMS}, GPG signature; draft release\\
 \bottomrule
 \end{tabularx}
@@ -1177,8 +1408,9 @@ new shard at the maximum; bounds and interruption. A1 now also requires \Gm{}
 
 \begin{description}[leftmargin=1.5em,style=nextline,itemsep=2pt]
 \item[A15 \Gm{} installed.] After A1, \code{ctl games status --json} reports the
-  portal ready, six environments at their bundled versions, and F1R3Pix and F1R3Beat
-  registered with entries at \code{localhost:40701} and \code{:40702}.
+  portal ready, six environments at their bundled versions, and F1R3Pix, F1R3Beat and
+  F1R3Ink registered with entries at \code{localhost:40701}, \code{:40702} and
+  \code{:40703}.
 \item[A16 Playing in a stock browser.] Driven by Playwright in Chromium, WebKit and
   Firefox: sign on with a passphrase; the faucet funds the key; launch an F1R3Pix
   instance; seat, paint, publish a canvas; the gallery lists it and the renderer
@@ -1198,10 +1430,34 @@ new shard at the maximum; bounds and interruption. A1 now also requires \Gm{}
   F1R3Pix is untouched.
 \item[A21 Evacuation.] Shrinking away the portal's validator moves the portal first;
   a move sent during the shrink finalises.
-\item[A22 Off and on.] \code{ctl games off} frees ports 40700--40702; \code{on}
+\item[A22 Off and on.] \code{ctl games off} frees ports 40700--40703; \code{on}
   restarts with no deploy and the same origin.
 \item[A23 Loopback.] \code{lsof} lists \code{f1r3games-service} only on
   \code{127.0.0.1} and \code{::1}.
+\item[A24 F1R3Ink registered with its relay.] \code{/api/games/f1r3ink} lists the
+  entry at \code{:40703}, renderers \code{round} and \code{flag}, and
+  \code{relay = http://localhost:40700/api/relay/f1r3ink}; its renderers are served
+  with \code{frame-ancestors}.
+\item[A25 The relay runs and is named.] \code{ctl games status --json} reports the
+  relay running and named; the node finalised exactly one \code{setRelay}; a malformed
+  request to the relay is refused for its form or signature (not 404); the portal's
+  configuration has \code{[relay]}, the jobs' has not; no relay key appears in any
+  argument vector or file.
+\item[A26 Upgrade from version 0.4.] A shard provisioned by \Hr{} 0.2.0 (F1R3Ink an
+  unregistered environment at version~1), then started by version 0.5: F1R3Ink's
+  environment is replaced at version~2 with no consent asked, registered, and the
+  relay named; F1R3Pix and F1R3Beat are not registered again; nothing waits.
+\item[A27 Relay off and on.] \code{ctl games relay off} restarts the portal without
+  the relay (its URL answers 404) and registers nothing; \code{on} restores it without
+  naming it again. After a reset it is named again on the new chain.
+\item[A28 Anonymous ink in a stock browser.] Five keystores (five browser profiles)
+  enter an F1R3Ink round launched with anonymous ink; each inks another anonymously;
+  within one window plus finalisation every stripe shows its colour with no inker on
+  chain, the relay's key paid the phlo, and a reveal attributes one. Then the same in
+  a round with public flags, sealed inks and decay.
+\item[A29 The menu opens games.] ``New F1R3Ink game'' opens F1R3Ink's launch page
+  and ``F1R3Ink gallery'' its gallery, in the default browser; neither item appears
+  for a game that is not registered.
 \end{description}
 
 %======================================================================
@@ -1224,7 +1480,13 @@ H7 & \Hr{}: manifest schema 4, \code{games.secrets}, stages G1--G7, the portal r
 H8 & \Hr{}: menu items, \Gm{} pane, first-run additions, opening the browser & 1 & new\\
 H9 & \Hr{}: reset, rotation, uninstall and upgrade dialogs for \Gm{} & 1 & new\\
 R2 & release: the \code{games} job, bundle layout, signing, smoke additions & 1 & new\\
-T2 & A15--A23; browser matrix; footprint and on-chain growth of plays & 1.5 & new\\
+T2 & A15--A23; browser matrix; footprint and on-chain growth of plays & 1.5 & partly\\
+\midrule
+F8 & \Gm{}: F1R3Ink's relay & --- & landed (\code{d2381c6})\\
+F9, F10 & \Gm{}: compare the relay at registration; relay only for \code{serve}, and reported & 0.35 & new\\
+H10 & \Hr{}: F1R3Ink's client, the relay's secrets, two configurations, G3 funding, G6 \code{--relay-base}, G7 naming, silent upgrades, \code{ctl games relay}, \code{ctl games open GAME}, top-ups, the breeder funding fix & 1 & implemented (\code{spec-v0.5})\\
+H11 & \Hr{}: the menu's launch and gallery items (implemented), the panel's relay row and ``Play'' links in the first-run summary (open) & 0.5 & partly\\
+T3 & A24--A29; phlo per relayed batch on a real node & 1 & A24--A27, A29 against the stand-in node\\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -1235,6 +1497,8 @@ H7 needs game origins to register entries, headless registration to finish G6, a
 readiness to supervise. F1 and F4 can follow (H7 has an interim for F1). With one
 engineer on \Gm{} (F1--F7) and one on \Hr{} (H7--H9, R2), and T2 shared, the
 component fits in five to six calendar weeks, alongside the open version 0.3 work.
+Version 0.5 adds about two engineer-weeks, half of it already done; its critical path
+is T3's A28 on a real node, which also discharges Obligation~\ref{ob:envs} for F1R3Ink.
 
 %======================================================================
 \section{Obligations and decisions}\label{sec:open}
@@ -1247,7 +1511,8 @@ footprint (T1); measured fault tolerance (T1); PEM compatibility (discharged at
 
 \begin{obligation}[The environments behave on a node]\label{ob:envs}
 Before H7 is merged, T2 must show, on an \Hr{} shard at the pinned node, the portal
-environment and the F1R3Pix and F1R3Beat environments doing what their designs say,
+environment and the F1R3Pix, F1R3Beat and F1R3Ink environments doing what their designs say
+(for F1R3Ink, with the relay: \code{relayInk} batches, \code{relayReveal}, decay on block time),
 including the parts \Gm{}'s \code{IMPLEMENTATION.md} lists as unverified (the
 \code{TreeHashMap} handle, sponsorship escrow, \code{/\textbackslash\ Int} and
 \code{/\textbackslash\ String} patterns, phlo per move), and record phlo per move and
@@ -1293,7 +1558,11 @@ depend on \Em{}, but the release must not ship a pair that fails: pin a compatib
 \end{tabularx}
 \end{center}
 
-\subsection{Open decisions}
+\subsection{Resolved on 7 October 2026}\label{sec:resolved4}
+
+Decisions 9--17 were opened by version 0.4 and implemented as proposed (see the
+implementation notes); they are kept here, numbered as before, as the record.
+Decision~\ref{dec:which} now registers F1R3Ink too, its client having landed.
 
 \setcounter{decision}{8}
 \begin{decision}[The \Gm{} port block]\label{dec:ports}
@@ -1344,6 +1613,49 @@ point it at the local portal (proposed); it is how a developer scripts plays and
 On by default in the first-run window, like \Em{} (proposed).
 \end{decision}
 
+\subsection{Open decisions}
+
+Opened by version 0.5. Each is implemented as proposed, as a setting or a constant,
+so a different answer changes a default, not the design.
+
+\begin{decision}[The relay by default]\label{dec:relayon}
+On whenever F1R3Ink is installed (proposed, and implemented): a round that offers
+anonymous ink then works, and the relay's cost on a local shard is the faucet's. Or
+off, so that nothing on the Mac learns who inks whom until the person chooses it.
+\end{decision}
+
+\begin{decision}[Where the relay runs]\label{dec:relayproc}
+Inside the portal process, as \Svc{} implements it (proposed, and implemented). Or a
+second \Svc{} process serving only \code{/api/relay}, with its own port and the relay's
+keys alone, which isolates those keys from the portal but needs F10 and a manifest
+\code{relay} on another origin, and so CORS.
+\end{decision}
+
+\begin{decision}[The relay's URL while it is off]\label{dec:relayurl}
+F1R3Ink's manifest names the relay whether or not it runs (proposed, and implemented,
+because of Finding~\ref{f:matches}); off, the portal answers 404. With F9, the
+alternative is to register F1R3Ink without \code{relay} while it is off, so the shell
+says ``no relay'' at launch rather than at the first anonymous ink.
+\end{decision}
+
+\begin{decision}[Upgrading a never-registered environment]\label{dec:silent}
+Replace it without asking (proposed, and implemented), since no instance can exist;
+or treat it as any other upgrade and ask, which makes every version 0.4 install show
+an ``F1R3Ink update'' dialog that discards nothing.
+\end{decision}
+
+\begin{decision}[Relay funding]\label{dec:relayfund}
+1\,000~F1R3 at G3, topped up to 1\,000 below 100 (proposed); or the faucet's
+remaining balance as the only limit. T3 measures phlo per batch to settle it.
+\end{decision}
+
+\begin{decision}[Anonymous ink on a one-person shard]\label{dec:anonmin}
+Keep F1R3Ink's minimum of five players in a round for anonymous ink (proposed): a
+person alone on the local shard, with one browser, cannot use it, which is the point
+of the minimum. Or let a launch lower it on the local shard, for demonstrations; that
+is a launch option, not an installer setting.
+\end{decision}
+
 %======================================================================
 \appendix
 \section{Configuration templates}\label{app:conf}
@@ -1379,11 +1691,13 @@ logging { format = "json", sink = "stdout" }
 \subsection*{A.2 \code{games/f1r3games.toml}}
 
 \begin{lstlisting}[language=Conf]
-# Rendered by ign1t10n at G4 and at every start (the validator is redrawn).
-listen        = ["127.0.0.1:40700", "[::1]:40700"]      # F4; one address until it lands
+# Rendered by ign1t10n at G4 and at every start (the validators are redrawn).
+# games/f1r3games-jobs.toml is the same file without [relay].
+listen        = ["127.0.0.1:40700", "[::1]:40700"]      # F4
 public_host   = "localhost:40700"                       # F4
 shard_id      = "root"
-validator_url = "http://127.0.0.1:40420"                # a randomly drawn active validator
+validator_url = "http://127.0.0.1:40420"                # the first of validator_urls
+validator_urls = ["http://127.0.0.1:40420", "http://127.0.0.1:40410"]   # F7, shuffled
 observer_url  = "http://127.0.0.1:40453"
 coop_address  = "{{LOCAL_COOPERATIVE_ADDRESS}}"
 env_version   = 1                                       # from Resources/f1r3games/games.toml
@@ -1397,7 +1711,7 @@ bootstrap_env      = false        # installation is a job (G4), not a side effec
 cors_origins       = []           # the shell is same-origin
 portal_base_url    = "http://localhost:40700"
 static_dir         = "/Applications/ign1t10n.app/Contents/Resources/f1r3games/portal"
-# keys come from the environment (F1); until then, *_file paths in a 0700 run directory
+# keys come from the environment (F1); none is ever in this file
 
 [faucet]
 enabled = true
@@ -1414,13 +1728,28 @@ id     = "f1r3beat"
 listen = ["127.0.0.1:40702", "[::1]:40702"]
 public_host = "localhost:40702"
 dir    = "/Applications/ign1t10n.app/Contents/Resources/f1r3games/games"
+
+[[origins]]                       # v0.5
+id     = "f1r3ink"
+listen = ["127.0.0.1:40703", "[::1]:40703"]
+public_host = "localhost:40703"
+dir    = "/Applications/ign1t10n.app/Contents/Resources/f1r3games/games"
+
+[relay]                           # F8, v0.5: only in the portal's file, only when the relay runs
+enabled       = true
+base_url      = "http://localhost:40700/api/relay"
+window_blocks = 3
+per_hour      = 30
 \end{lstlisting}
 
 \section{The manifest}\label{app:manifest}
 
 Schema 4 adds \code{[options].games}, \code{[options].games\_open\_at\_first\_run}
 and the \code{[games]} tables to schema 3; an absent \code{[games]} reads as
-\Gm{} never installed, so a schema-3 manifest upgrades in place.
+\Gm{} never installed, so a schema-3 manifest upgrades in place. Version 0.5 adds
+three keys to \code{[games]} without changing the schema number: \code{relay}
+(absent reads as true), \code{relay\_address} and \code{relay\_named} (absent reads as
+not named, so a version 0.4 manifest names the relay at its first start).
 
 \begin{lstlisting}[language=Conf]
 # ~/Library/Application Support/F1R3FLY/ign1t10n/shard.toml (excerpt)
@@ -1435,7 +1764,7 @@ games = true
 games_open_at_first_run = true
 
 [games]
-revision = "57a3b27"                     # the F1R3Games revision last installed
+revision = "d2381c6"                     # the F1R3Games revision last installed
 portal_port = 40700
 validator_slot = 2                       # drawn at each start
 service_address = "1111...Xs"
@@ -1445,6 +1774,9 @@ env_uri = "rho:id:...g7"
 env_version = 1
 faucet_f1r3 = 100
 breeder = false
+relay = true                             # v0.5: run F1R3Ink's relay (absent reads as true)
+relay_address = "1111...Rl"
+relay_named = 2                          # F1R3Ink's environment version it was named for
 
 [[games.game]]
 id = "f1r3pix"
@@ -1465,13 +1797,15 @@ registered = true
 manifest_sha256 = "a3b1...0d"
 
 [[games.game]]
-id = "f1r3ink"                           # environment installed, not registered
+id = "f1r3ink"
+port = 40703
 env_uri = "rho:id:...k2"
-env_version = 1
-client = false
-registered = false
+env_version = 2                          # 1 under v0.4, replaced without consent (never registered)
+client = true
+registered = true
+manifest_sha256 = "77d2...4e"
 
-[games.stages]                           # G1..G7, cleared from G3 at reset
+[games.stages]                           # G1..G6 and G8, cleared from G3 at reset; G7 is relay_named
 secrets = true
 ports = true
 funded = true
