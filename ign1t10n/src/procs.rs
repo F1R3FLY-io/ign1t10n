@@ -3,7 +3,7 @@
 //! log, and ordered termination.
 
 use crate::logging::{MB, Rotating};
-use crate::manifest::Manifest;
+use crate::manifest::{DriveConf, Manifest};
 use crate::paths::Paths;
 use crate::ports::Block;
 use std::io::Read;
@@ -16,6 +16,10 @@ pub enum Role {
     Validator(u8),
     Observer,
     Embers,
+    /// A `file-read-service` HTTP sidecar paired with one shard node.
+    FileReadService { node: String },
+    /// An opt-in f1r3drive FUSE mount, keyed by its manifest alias.
+    F1r3Drive { alias: String },
 }
 
 impl Role {
@@ -25,6 +29,8 @@ impl Role {
             Role::Validator(k) => crate::nodeconf::validator_name(*k),
             Role::Observer => "observer".into(),
             Role::Embers => "embers".into(),
+            Role::FileReadService { node } => format!("sidecar-{node}"),
+            Role::F1r3Drive { alias } => format!("drive-{alias}"),
         }
     }
     pub fn parse(s: &str) -> Option<Role> {
@@ -32,7 +38,15 @@ impl Role {
             "bootstrap" => Some(Role::Bootstrap),
             "observer" => Some(Role::Observer),
             "embers" => Some(Role::Embers),
-            _ => s.strip_prefix("validator-").and_then(|k| k.parse().ok()).map(Role::Validator),
+            _ => {
+                if let Some(k) = s.strip_prefix("validator-").and_then(|k| k.parse().ok()) {
+                    Some(Role::Validator(k))
+                } else if let Some(node) = s.strip_prefix("sidecar-") {
+                    Some(Role::FileReadService { node: node.into() })
+                } else {
+                    s.strip_prefix("drive-").map(|a| Role::F1r3Drive { alias: a.into() })
+                }
+            }
         }
     }
 }
@@ -67,7 +81,7 @@ pub fn node_args(p: &Paths, m: &Manifest, role: &Role) -> Result<Vec<String>, St
             a.extend(["--bootstrap".into(), bootstrap_address(m).ok_or("bootstrap node id unknown")?]);
             a.push("--heartbeat-disabled".into());
         }
-        Role::Embers => return Err("embers is not a node".into()),
+        Role::Embers | Role::FileReadService { .. } | Role::F1r3Drive { .. } => return Err("not a shard node".into()),
     }
     // Ports on the command line: the node's port options have default values
     // (40400, 40403, ...), and a default counts as given, so it overrides the
@@ -76,7 +90,7 @@ pub fn node_args(p: &Paths, m: &Manifest, role: &Role) -> Result<Vec<String>, St
         Role::Bootstrap => m.bootstrap.base_port,
         Role::Observer => m.observer.base_port,
         Role::Validator(k) => m.validator(*k).ok_or_else(|| format!("no validator {k}"))?.base_port,
-        Role::Embers => unreachable!(),
+        Role::Embers | Role::FileReadService { .. } | Role::F1r3Drive { .. } => unreachable!(),
     };
     let b = crate::ports::Block(base);
     for (flag, port) in [
@@ -95,6 +109,71 @@ pub fn node_args(p: &Paths, m: &Manifest, role: &Role) -> Result<Vec<String>, St
     a.extend(["--network-id".to_string(), m.shard.network_id.clone()]);
     a.extend(common.iter().map(|s| s.to_string()));
     a.extend(TOKEN_FLAGS.iter().map(|s| s.to_string()));
+    Ok(a)
+}
+
+/// Argument vector for a `file-read-service` sidecar: config file + bind.
+pub fn sidecar_args(p: &Paths, node: &str, port: u16) -> Vec<String> {
+    vec![
+        "--config".into(),
+        p.sidecar_conf(node).display().to_string(),
+        "--bind".into(),
+        format!("127.0.0.1:{port}"),
+    ]
+}
+
+/// Argument vector for an `f1r3drive` daemon in `extension` mode. Panics on
+/// the manifest being malformed is unreachable: `drive::up` validates its
+/// `DriveConf` before spawn.
+pub fn drive_args(_p: &Paths, m: &Manifest, d: &DriveConf) -> Result<Vec<String>, String> {
+    let validator_base = m
+        .validators
+        .iter()
+        .find(|v| crate::nodeconf::validator_name(v.slot) == d.validator)
+        .map(|v| v.base_port)
+        .ok_or_else(|| format!("drive points at unknown validator {}", d.validator))?;
+    let observer_base = match d.observer.as_str() {
+        "observer" => m.observer.base_port,
+        "bootstrap" => m.bootstrap.base_port,
+        other => m
+            .validators
+            .iter()
+            .find(|v| crate::nodeconf::validator_name(v.slot) == other)
+            .map(|v| v.base_port)
+            .ok_or_else(|| format!("drive points at unknown observer {other}"))?,
+    };
+    let sidecar_port = m
+        .sidecar_configs
+        .get(&d.sidecar)
+        .map(|s| s.port)
+        .ok_or_else(|| format!("drive points at unknown sidecar {}", d.sidecar))?;
+    let vb = Block(validator_base);
+    let ob = Block(observer_base);
+    let mut a: Vec<String> = vec![
+        d.mount_dir.clone(),
+        "--mount-mode".into(),
+        "extension".into(),
+        "--state-dir".into(),
+        d.state_dir.clone(),
+        "--key-file".into(),
+        d.key_file.clone(),
+        "--host".into(),
+        "127.0.0.1".into(),
+        "--port".into(),
+        vb.grpc_external().to_string(),
+        "--observer-host".into(),
+        "127.0.0.1".into(),
+        "--observer-port".into(),
+        ob.grpc_external().to_string(),
+        "--sidecar-url".into(),
+        format!("http://127.0.0.1:{sidecar_port}"),
+        "--shard-id".into(),
+        m.shard.id.clone(),
+        "--chain-blobs".into(),
+    ];
+    for pk in &d.tracked_pubkeys {
+        a.extend(["--track-pubkey".into(), pk.clone()]);
+    }
     Ok(a)
 }
 
@@ -199,5 +278,40 @@ mod tests {
         let o = node_args(&p, &m, &Role::Observer).unwrap();
         assert!(!o.iter().any(|a| a.contains("private-key")));
         assert_eq!(Role::parse("validator-7"), Some(Role::Validator(7)));
+        assert_eq!(Role::parse("sidecar-validator-1"), Some(Role::FileReadService { node: "validator-1".into() }));
+        assert_eq!(Role::parse("drive-alice"), Some(Role::F1r3Drive { alias: "alice".into() }));
+    }
+
+    #[test]
+    fn sidecar_argv_names_the_config_and_bind() {
+        let p = Paths::from_env();
+        let a = sidecar_args(&p, "validator-1", 41410);
+        assert!(a.windows(2).any(|w| w[0] == "--bind" && w[1] == "127.0.0.1:41410"));
+        assert!(a.windows(2).any(|w| w[0] == "--config" && w[1].ends_with("sidecar-validator-1.conf")));
+    }
+
+    #[test]
+    fn drive_argv_wires_validator_observer_sidecar() {
+        let p = Paths::from_env();
+        let mut m = crate::manifest::tests_support::sample();
+        m.sidecar_configs.insert("validator-1".into(), crate::manifest::SidecarConf { port: 41410 });
+        let d = DriveConf {
+            state_dir: "/tmp/d/alice".into(),
+            key_file: "/tmp/d/alice/deployer.hex".into(),
+            mount_dir: "/tmp/f1r3drive/alice".into(),
+            validator: "validator-1".into(),
+            observer: "observer".into(),
+            sidecar: "validator-1".into(),
+            tracked_pubkeys: vec!["04deadbeef".into()],
+            pid: None,
+        };
+        let a = drive_args(&p, &m, &d).unwrap();
+        assert_eq!(a[0], d.mount_dir);
+        assert!(a.windows(2).any(|w| w[0] == "--mount-mode" && w[1] == "extension"));
+        assert!(a.windows(2).any(|w| w[0] == "--port" && w[1] == "40411"), "validator-1 grpc_external");
+        assert!(a.windows(2).any(|w| w[0] == "--observer-port" && w[1] == "40451"));
+        assert!(a.windows(2).any(|w| w[0] == "--sidecar-url" && w[1] == "http://127.0.0.1:41410"));
+        assert!(a.iter().any(|x| x == "--chain-blobs"));
+        assert!(a.windows(2).any(|w| w[0] == "--track-pubkey" && w[1] == "04deadbeef"));
     }
 }

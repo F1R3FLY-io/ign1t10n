@@ -27,6 +27,47 @@ pub enum Request {
     Reallocate { node: String },
     /// Stop the shard and exit the supervisor (uninstall, reset).
     Shutdown,
+    /// Spawn (or re-spawn) every file-read-service sidecar listed in the
+    /// manifest and wait until each one answers HTTP. Idempotent.
+    StartSidecars,
+    /// Register a new drive, generate its deployer key, and persist the
+    /// manifest entry. Does not mount.
+    DriveAdd { alias: String },
+    /// Mount a registered drive (spawn `f1r3drive` and wait for the mount
+    /// to appear).
+    DriveUp { alias: String },
+    /// Unmount a drive (SIGTERM the daemon, umount, clear `pid`).
+    DriveDown { alias: String },
+    /// `DriveDown` + remove the state dir and the manifest entry.
+    DriveRemove { alias: String },
+    /// A snapshot of every drive's state.
+    DriveStatus,
+    /// Append `peer` to the drive's `tracked_pubkeys` and re-mount it if
+    /// currently running.
+    DriveTrack { alias: String, peer: String },
+    /// Change which validator / observer / sidecar a drive is pinned to.
+    /// `None` fields leave the current pin alone. If the drive is up, it
+    /// is cycled so the new routing takes effect.
+    DriveRepoint {
+        alias: String,
+        validator: Option<String>,
+        observer: Option<String>,
+        sidecar: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DriveReport {
+    pub alias: String,
+    pub mount_dir: String,
+    pub validator: String,
+    pub observer: String,
+    pub sidecar: String,
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tracked_pubkeys: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -38,6 +79,8 @@ pub struct Response {
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<Report>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drives: Vec<DriveReport>,
 }
 
 impl Response {
@@ -166,6 +209,25 @@ mod tests {
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
         let st = serde_json::to_string(&ShardState::Degraded("observer lag".into())).unwrap();
         assert_eq!(st, r#"{"state":"degraded","detail":"observer lag"}"#);
+    }
+
+    #[test]
+    fn drive_requests_round_trip() {
+        for r in [
+            Request::StartSidecars,
+            Request::DriveAdd { alias: "alice".into() },
+            Request::DriveUp { alias: "alice".into() },
+            Request::DriveDown { alias: "alice".into() },
+            Request::DriveRemove { alias: "alice".into() },
+            Request::DriveStatus,
+            Request::DriveTrack { alias: "alice".into(), peer: "04deadbeef".into() },
+            Request::DriveRepoint { alias: "alice".into(), validator: Some("validator-2".into()), observer: None, sidecar: Some("validator-2".into()) },
+        ] {
+            let s = serde_json::to_string(&r).unwrap();
+            assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        }
+        let add = serde_json::to_string(&Request::DriveAdd { alias: "alice".into() }).unwrap();
+        assert_eq!(add, r#"{"op":"drive-add","alias":"alice"}"#);
     }
 
     #[test]

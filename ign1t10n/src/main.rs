@@ -20,6 +20,14 @@ const USAGE: &str = "usage:
   ign1t10n ctl reallocate NODE           new ports for a node whose ports are taken
   ign1t10n ctl env                       endpoints, for scripts
   ign1t10n ctl logs [NODE]               last lines of a log
+  ign1t10n ctl drive add ALIAS           register a new f1r3drive mount (does not mount)
+  ign1t10n ctl drive up ALIAS            mount a registered drive
+  ign1t10n ctl drive down ALIAS          unmount a drive
+  ign1t10n ctl drive remove ALIAS        unmount and forget a drive
+  ign1t10n ctl drive status [ALIAS]      list drives and their state
+  ign1t10n ctl drive track ALIAS PUBKEY  follow a peer's deploys on this drive
+  ign1t10n ctl drive repoint ALIAS [--validator NODE] [--observer NODE] [--sidecar NODE]
+                                         re-pin a drive to a different validator/observer/sidecar
   ign1t10n ctl provision [--non-interactive] [--validators N] [--no-embers] [--no-gaze] [--open]
   ign1t10n ctl reset [--validators N] --yes
   ign1t10n ctl uninstall --yes [--keep-archive]
@@ -83,6 +91,52 @@ fn status(p: &Paths, json: bool) {
     }
 }
 
+fn drive(p: &Paths, args: &[String]) {
+    let (verb, rest) = match args.split_first() {
+        Some((v, r)) => (v.as_str(), r),
+        None => die("drive add|up|down|remove|status|track …"),
+    };
+    let alias = || rest.first().cloned().unwrap_or_else(|| die(format!("drive {verb} ALIAS")));
+    match verb {
+        "add" => say(p, Request::DriveAdd { alias: alias() }),
+        "up" => say(p, Request::DriveUp { alias: alias() }),
+        "down" => say(p, Request::DriveDown { alias: alias() }),
+        "remove" => say(p, Request::DriveRemove { alias: alias() }),
+        "status" => {
+            let want = rest.first().cloned();
+            let resp = call(p, Request::DriveStatus);
+            for d in resp.drives.iter().filter(|d| want.as_deref().is_none_or(|w| w == d.alias)) {
+                println!(
+                    "{:<16} {:<10} v={}  obs={}  sc={}  pid={}  tracked=[{}]  mount={}",
+                    d.alias,
+                    if d.running { "running" } else { "down" },
+                    d.validator,
+                    d.observer,
+                    d.sidecar,
+                    d.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+                    d.tracked_pubkeys.join(","),
+                    d.mount_dir,
+                );
+            }
+        }
+        "track" => {
+            let (Some(a), Some(peer)) = (rest.first(), rest.get(1)) else { die("drive track ALIAS PUBKEY") };
+            say(p, Request::DriveTrack { alias: a.clone(), peer: peer.clone() })
+        }
+        "repoint" => {
+            let a = alias();
+            let validator = opt::<String>(rest, "--validator");
+            let observer = opt::<String>(rest, "--observer");
+            let sidecar = opt::<String>(rest, "--sidecar");
+            if validator.is_none() && observer.is_none() && sidecar.is_none() {
+                die("drive repoint needs --validator, --observer, or --sidecar");
+            }
+            say(p, Request::DriveRepoint { alias: a, validator, observer, sidecar })
+        }
+        _ => die("drive add|up|down|remove|status|track|repoint …"),
+    }
+}
+
 fn ctl(p: &Paths, args: &[String]) {
     let verb = args.first().map(String::as_str).unwrap_or("status");
     let rest = &args[args.len().min(1)..];
@@ -104,6 +158,7 @@ fn ctl(p: &Paths, args: &[String]) {
         "embers" => say(p, Request::SetOptions { embers: Some(on_off(rest.first())), gaze_integration: None }),
         "gaze" => say(p, Request::SetOptions { embers: None, gaze_integration: Some(on_off(rest.first())) }),
         "reallocate" => say(p, Request::Reallocate { node: rest.first().cloned().unwrap_or_else(|| die("reallocate NODE")) }),
+        "drive" => drive(p, rest),
         "env" => {
             let r = call(p, Request::Status).status.unwrap_or_default();
             println!("F1R3_VALIDATORS={}", r.gaze_validators.join(","));

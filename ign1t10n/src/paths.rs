@@ -15,6 +15,10 @@ pub struct Paths {
     /// Bundled executables: `f1r3node`, `embers`, and this binary.
     pub node_bin: PathBuf,
     pub embers_bin: PathBuf,
+    /// `file-read-service` HTTP sidecar binary.
+    pub sidecar_bin: PathBuf,
+    /// `f1r3drive` FUSE mount binary.
+    pub f1r3drive_bin: PathBuf,
     /// `IGN1T10N_GAZE_BIN`: a `f1r3gaze` to use instead of the installed one
     /// (development, tests).
     pub gaze_override: Option<PathBuf>,
@@ -60,6 +64,8 @@ impl Paths {
         Paths {
             node_bin: env_path("IGN1T10N_NODE_BIN").unwrap_or_else(|| helpers.join("f1r3node")),
             embers_bin: env_path("IGN1T10N_EMBERS_BIN").unwrap_or_else(|| helpers.join("embers")),
+            sidecar_bin: env_path("IGN1T10N_SIDECAR_BIN").unwrap_or_else(|| helpers.join("file-read-service")),
+            f1r3drive_bin: env_path("IGN1T10N_F1R3DRIVE_BIN").unwrap_or_else(|| helpers.join("f1r3drive")),
             gaze_override: env_path("IGN1T10N_GAZE_BIN"),
             bundled_gaze: contents.join("Resources/F1R3Gaze.app"),
             self_bin,
@@ -107,8 +113,11 @@ impl Paths {
     pub fn genesis(&self) -> PathBuf { self.state.join("genesis") }
     pub fn conf(&self) -> PathBuf { self.state.join("conf") }
     pub fn conf_file(&self, name: &str) -> PathBuf { self.conf().join(format!("{name}.conf")) }
+    pub fn sidecar_conf(&self, node: &str) -> PathBuf { self.conf().join(format!("sidecar-{node}.conf")) }
     pub fn nodes(&self) -> PathBuf { self.state.join("nodes") }
     pub fn node_dir(&self, name: &str) -> PathBuf { self.nodes().join(name) }
+    pub fn drives(&self) -> PathBuf { self.state.join("drives") }
+    pub fn drive_dir(&self, alias: &str) -> PathBuf { self.drives().join(alias) }
     pub fn run(&self) -> PathBuf { self.state.join("run") }
     pub fn socket(&self) -> PathBuf { self.run().join("control.sock") }
     pub fn pidfile(&self) -> PathBuf { self.run().join("supervisor.pid") }

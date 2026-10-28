@@ -1,8 +1,9 @@
 #!/bin/sh
 # Assemble, sign, package and notarise ign1t10n (spec §11). Run on an
-# Apple-silicon macOS runner after the node, embers and gaze jobs.
+# Apple-silicon macOS runner after the node, embers, sidecar, f1r3drive and
+# gaze jobs.
 #
-#   build.sh VERSION NODE_BIN EMBERS_BIN GAZE
+#   build.sh VERSION NODE_BIN EMBERS_BIN SIDECAR_BIN F1R3DRIVE_BIN GAZE
 #
 # GAZE is F1R3Gaze as its packaging produces it (F1R3Gaze-<v>-macos-*.dmg),
 # a .pkg containing F1R3Gaze.app, or a F1R3Gaze.app directory.
@@ -15,10 +16,12 @@
 # (local testing only, until work package N2): the package then works only
 # on Macs with that Homebrew library.
 set -eu
-VERSION="$1"; NODE="$2"; EMBERS="$3"; GAZE_IN="$4"
-[ $# -eq 4 ] || { echo "usage: build.sh VERSION NODE_BIN EMBERS_BIN GAZE(.dmg|.pkg|.app)"; exit 1; }
+VERSION="$1"; NODE="$2"; EMBERS="$3"; SIDECAR="$4"; F1R3DRIVE="$5"; GAZE_IN="$6"
+[ $# -eq 6 ] || { echo "usage: build.sh VERSION NODE_BIN EMBERS_BIN SIDECAR_BIN F1R3DRIVE_BIN GAZE(.dmg|.pkg|.app)"; exit 1; }
 [ -x "$NODE" ] || { echo "node binary not found or not executable: $NODE"; exit 1; }
 [ -x "$EMBERS" ] || { echo "embers binary not found or not executable: $EMBERS"; exit 1; }
+[ -x "$SIDECAR" ] || { echo "file-read-service binary not found or not executable: $SIDECAR"; exit 1; }
+[ -x "$F1R3DRIVE" ] || { echo "f1r3drive binary not found or not executable: $F1R3DRIVE"; exit 1; }
 [ -e "$GAZE_IN" ] || { echo "F1R3Gaze not found: $GAZE_IN (make it with packaging/macos/make-gaze-app.sh, or pass /Applications/F1R3Gaze.app)"; exit 1; }
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$HERE/../.."
 OUT="$ROOT/dist"; WORK="$OUT/work"; rm -rf "$WORK"; mkdir -p "$WORK/root/Applications" "$OUT"
@@ -30,6 +33,8 @@ cargo build --release --locked --target aarch64-apple-darwin --manifest-path "$R
 cp "$ROOT/target/aarch64-apple-darwin/release/ign1t10n" "$C/MacOS/ign1t10n"
 cp "$NODE" "$C/Helpers/f1r3node"
 cp "$EMBERS" "$C/Helpers/embers"
+cp "$SIDECAR" "$C/Helpers/file-read-service"
+cp "$F1R3DRIVE" "$C/Helpers/f1r3drive"
 sed -e "s/@VERSION@/$VERSION/" -e "s/@BUILD@/$(date +%Y%m%d%H%M)/" "$HERE/Info.plist" > "$C/Info.plist"
 cp "$HERE/LaunchAgents/io.f1r3fly.ign1t10n.supervisor.plist" "$C/Library/LaunchAgents/"
 cp "$HERE/uninstall.sh" "$ROOT/versions.toml" "$ROOT/compat.toml" "$C/Resources/"
@@ -63,7 +68,7 @@ ditto "$GAZE_APP" "$C/Resources/F1R3Gaze.app"
 
 # Gates (spec §11.3): arm64 only, no dynamic OpenSSL, no development keys.
 LOCAL_LIBS=""
-for b in "$C/MacOS/ign1t10n" "$C/Helpers/f1r3node" "$C/Helpers/embers"; do
+for b in "$C/MacOS/ign1t10n" "$C/Helpers/f1r3node" "$C/Helpers/embers" "$C/Helpers/file-read-service" "$C/Helpers/f1r3drive"; do
   lipo -archs "$b" | grep -qx arm64 || { echo "$b is not arm64-only"; exit 1; }
   if otool -L "$b" | grep -Eiq 'libssl|libcrypto|/opt/homebrew|/usr/local'; then
     echo "$b links a non-system library:"; otool -L "$b" | grep -Ei 'libssl|libcrypto|/opt/homebrew|/usr/local'
@@ -97,7 +102,7 @@ no_relocation() {
 SIGN="${SIGN_APP:--}"
 # Secure timestamps need a real identity; ad-hoc signatures cannot have one.
 TS="--timestamp"; [ "$SIGN" = "-" ] && TS="--timestamp=none"
-for b in "$C/Helpers/f1r3node" "$C/Helpers/embers" "$C/MacOS/ign1t10n"; do
+for b in "$C/Helpers/f1r3node" "$C/Helpers/embers" "$C/Helpers/file-read-service" "$C/Helpers/f1r3drive" "$C/MacOS/ign1t10n"; do
   ENT="$HERE/entitlements.plist"
   case " $LOCAL_LIBS " in *" $b "*) ENT="$HERE/entitlements-local-libs.plist" ;; esac
   codesign --force --options runtime $TS --entitlements "$ENT" -s "$SIGN" "$b"

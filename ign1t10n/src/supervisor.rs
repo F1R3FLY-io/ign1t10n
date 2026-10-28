@@ -7,6 +7,7 @@ use crate::admin;
 use crate::amounts::*;
 use crate::api::Api;
 use crate::control::{self, NodeReport, Report, Request, Response, ShardState};
+use crate::drive;
 use crate::keys::Key;
 use crate::manifest::{Manifest, SlotState, Validator};
 use crate::paths::Paths;
@@ -189,7 +190,7 @@ impl Supervisor {
             Role::Bootstrap => m.bootstrap.base_port,
             Role::Observer => m.observer.base_port,
             Role::Validator(k) => m.validator(*k).ok_or("no such validator")?.base_port,
-            Role::Embers => return Err("embers".into()),
+            Role::Embers | Role::FileReadService { .. } | Role::F1r3Drive { .. } => return Err("not a node role".into()),
         };
         Ok(Api::new(Block(base).http_url()))
     }
@@ -200,12 +201,25 @@ impl Supervisor {
 
     fn spawn_node(&self, role: Role) -> Result<(), String> {
         let m = self.manifest()?;
-        let (program, args, env) = if role == Role::Embers {
-            let e = crate::embers::load_or_create(&*self.secrets)?;
-            let slot = m.embers.as_ref().and_then(|x| x.validator_slot).ok_or("embers has no validator")?;
-            (self.paths.embers_bin.clone(), vec![], crate::embers::env(&m, &e, slot)?)
-        } else {
-            (self.paths.node_bin.clone(), procs::node_args(&self.paths, &m, &role)?, self.node_env(&role)?)
+        let (program, args, env) = match &role {
+            Role::Embers => {
+                let e = crate::embers::load_or_create(&*self.secrets)?;
+                let slot = m.embers.as_ref().and_then(|x| x.validator_slot).ok_or("embers has no validator")?;
+                (self.paths.embers_bin.clone(), vec![], crate::embers::env(&m, &e, slot)?)
+            }
+            Role::FileReadService { node } => {
+                let port = m
+                    .sidecar_configs
+                    .get(node)
+                    .map(|s| s.port)
+                    .ok_or_else(|| format!("no sidecar config for {node}"))?;
+                (self.paths.sidecar_bin.clone(), procs::sidecar_args(&self.paths, node, port), procs::base_env())
+            }
+            Role::F1r3Drive { alias } => {
+                let d = m.drives.get(alias).ok_or_else(|| format!("no drive {alias}"))?.clone();
+                (self.paths.f1r3drive_bin.clone(), procs::drive_args(&self.paths, &m, &d)?, procs::base_env())
+            }
+            _ => (self.paths.node_bin.clone(), procs::node_args(&self.paths, &m, &role)?, self.node_env(&role)?),
         };
         let p = procs::spawn(&program, &args, &env, self.paths.stdout_log(&role.name()), role.clone())?;
         info!("started {} (pid {})", role.name(), p.child.id());
@@ -213,6 +227,66 @@ impl Supervisor {
         g.restart_at.remove(&role);
         g.procs.insert(role, p);
         Ok(())
+    }
+
+    pub(crate) fn running_role(&self, role: &Role) -> bool {
+        self.running(role)
+    }
+
+    pub(crate) fn drive_pid(&self, alias: &str) -> Option<u32> {
+        self.lock()
+            .procs
+            .get(&Role::F1r3Drive { alias: alias.into() })
+            .map(|p| p.child.id())
+    }
+
+    pub(crate) fn start_sidecars(&self) -> Result<(), String> {
+        let m = self.manifest()?;
+        let nodes: Vec<String> = m.sidecar_configs.keys().cloned().collect();
+        for node in &nodes {
+            let r = Role::FileReadService { node: node.clone() };
+            if !self.running(&r) {
+                self.spawn_node(r.clone())?;
+            }
+            // Each sidecar is tiny and comes up in well under a second.
+            let api = Api::new(format!("http://127.0.0.1:{}", m.sidecar_configs[node].port));
+            let t0 = Instant::now();
+            let timeout = Duration::from_secs(30).min(start_timeout_cap());
+            loop {
+                if api.sidecar_alive_why().is_ok() {
+                    info!("sidecar {node} ready after {}s", t0.elapsed().as_secs());
+                    break;
+                }
+                if !self.running(&r) {
+                    return Err(format!("sidecar {node} exited while starting; see {}", self.paths.stdout_log(&r.name()).display()));
+                }
+                if t0.elapsed() > timeout {
+                    return Err(format!("sidecar {node} not up after {}s", timeout.as_secs()));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn start_drive(&self, alias: &str) -> Result<(), String> {
+        let r = Role::F1r3Drive { alias: alias.into() };
+        if !self.running(&r) {
+            self.spawn_node(r.clone())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn stop_drive(&self, alias: &str) {
+        self.stop_role(&Role::F1r3Drive { alias: alias.into() }, Duration::from_secs(30));
+    }
+
+    pub(crate) fn manifest_public(&self) -> Result<Manifest, String> {
+        self.manifest()
+    }
+
+    pub(crate) fn update_public(&self, f: impl FnOnce(&mut Manifest) -> Result<(), String>) -> Result<Manifest, String> {
+        self.update(f)
     }
 
     fn running(&self, role: &Role) -> bool {
@@ -376,6 +450,26 @@ impl Supervisor {
             self.start_embers()?;
         }
 
+        // File-read-service sidecars, one per shard node. Started after
+        // the nodes themselves are ready so the sidecars never answer
+        // before their node is live. Skip if the manifest predates them;
+        // the Sidecars provisioning stage will configure them later.
+        if !self.manifest()?.sidecar_configs.is_empty() {
+            self.start_sidecars()?;
+        }
+
+        // Remount any drive that was up at last shutdown. `drive::down`
+        // clears pid, so a clean down leaves the drive down; a crash or
+        // logout leaves pid set and the drive is auto-remounted here.
+        // A single drive failing never fails the shard start.
+        let aliases: Vec<String> = self.manifest()?.drives.iter().filter(|(_, d)| d.pid.is_some()).map(|(a, _)| a.clone()).collect();
+        for alias in aliases {
+            match drive::up(self, &alias) {
+                Ok(()) => info!("drive {alias} auto-remounted"),
+                Err(e) => warn!("drive {alias} did not auto-remount: {e}"),
+            }
+        }
+
         // Where F1R3Gaze deploys: redrawn at each start (Decision 5).
         let mut m = self.manifest()?;
         if m.stages.gaze {
@@ -444,8 +538,9 @@ impl Supervisor {
         }
     }
 
-    /// Ordered stop (spec §7.4): observer and Embers, then every validator at
-    /// once, then the bootstrap.
+    /// Ordered stop (spec §7.4): drives first (release FUSE mounts), then
+    /// sidecars, Embers, observer; every validator at once; the bootstrap
+    /// last.
     pub fn stop_nodes(&self) {
         {
             // No restart that was already scheduled may outlive the stop.
@@ -453,6 +548,26 @@ impl Supervisor {
             g.want = false;
             g.restart_at.clear();
             g.exits.clear();
+        }
+        let drive_aliases: Vec<String> = {
+            let g = self.lock();
+            g.procs
+                .keys()
+                .filter_map(|r| if let Role::F1r3Drive { alias } = r { Some(alias.clone()) } else { None })
+                .collect()
+        };
+        for alias in drive_aliases {
+            self.stop_drive(&alias);
+        }
+        let sidecar_nodes: Vec<String> = {
+            let g = self.lock();
+            g.procs
+                .keys()
+                .filter_map(|r| if let Role::FileReadService { node } = r { Some(node.clone()) } else { None })
+                .collect()
+        };
+        for node in sidecar_nodes {
+            self.stop_role(&Role::FileReadService { node }, Duration::from_secs(10));
         }
         self.stop_role(&Role::Embers, Duration::from_secs(30));
         self.stop_role(&Role::Observer, Duration::from_secs(30));
@@ -792,6 +907,35 @@ impl Supervisor {
                 self.lock().shutdown = true;
                 Response::ok("shutting down")
             }
+            Request::StartSidecars => match self.start_sidecars() {
+                Ok(()) => Response::ok("sidecars running"),
+                Err(e) => Response::err(e),
+            },
+            Request::DriveAdd { alias } => match drive::add(self, &alias) {
+                Ok(()) => Response::ok(format!("drive {alias} added")),
+                Err(e) => Response::err(e),
+            },
+            Request::DriveUp { alias } => match drive::up(self, &alias) {
+                Ok(()) => Response::ok(format!("drive {alias} mounted")),
+                Err(e) => Response::err(e),
+            },
+            Request::DriveDown { alias } => match drive::down(self, &alias) {
+                Ok(()) => Response::ok(format!("drive {alias} unmounted")),
+                Err(e) => Response::err(e),
+            },
+            Request::DriveRemove { alias } => match drive::remove(self, &alias) {
+                Ok(()) => Response::ok(format!("drive {alias} removed")),
+                Err(e) => Response::err(e),
+            },
+            Request::DriveStatus => Response { ok: true, drives: drive::status(self), ..Default::default() },
+            Request::DriveTrack { alias, peer } => match drive::track(self, &alias, &peer) {
+                Ok(()) => Response::ok(format!("drive {alias} now tracks {peer}")),
+                Err(e) => Response::err(e),
+            },
+            Request::DriveRepoint { alias, validator, observer, sidecar } => match drive::repoint(self, &alias, validator.as_deref(), observer.as_deref(), sidecar.as_deref()) {
+                Ok(()) => Response::ok(format!("drive {alias} repointed")),
+                Err(e) => Response::err(e),
+            },
         }
     }
 
@@ -856,6 +1000,7 @@ impl Supervisor {
                 Role::Observer => m.observer.base_port,
                 Role::Validator(k) => m.validator(*k).ok_or("no such validator")?.base_port,
                 Role::Embers => m.embers.as_ref().ok_or("no embers")?.port,
+                Role::FileReadService { .. } | Role::F1r3Drive { .. } => return Err(format!("reallocate does not apply to {node}")),
             };
             taken.retain(|p| !(own..own + 6).contains(p));
             match &role {

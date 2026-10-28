@@ -172,6 +172,22 @@ pub fn validator_name(slot: u8) -> String {
     format!("validator-{slot}")
 }
 
+/// The HOCON config for a `file-read-service` sidecar bound to one node.
+/// All four buckets are empty by default; operators or client tools (such
+/// as f1r3drive) add entries later. The sidecar reads this once at
+/// startup and must be restarted to pick up changes.
+pub fn render_sidecar_conf(node: &str, port: u16) -> String {
+    format!(
+        r#"# Rendered by ign1t10n: sidecar for {node} on 127.0.0.1:{port}.
+# Each bucket maps a logical name to an absolute path (or {{ path, mode }}).
+oracle-static-files = {{}}
+oracle-static-dirs = {{}}
+consensus-static-files = {{}}
+consensus-static-dirs = {{}}
+"#,
+    )
+}
+
 /// Render every configuration file for the manifest's current nodes.
 pub fn write_all(p: &Paths, m: &Manifest) -> Result<(), String> {
     let w = |name: &str, body: String| write_atomic(&p.conf_file(name), body.as_bytes(), 0o600).map_err(|e| format!("{name}.conf: {e}"));
@@ -181,6 +197,10 @@ pub fn write_all(p: &Paths, m: &Manifest) -> Result<(), String> {
     for v in m.validators.iter().filter(|v| v.state != crate::manifest::SlotState::Absent) {
         let n = validator_name(v.slot);
         w(&n, node(p, &n, v.base_port, ""))?;
+    }
+    for (node, sc) in &m.sidecar_configs {
+        let body = render_sidecar_conf(node, sc.port);
+        write_atomic(&p.sidecar_conf(node), body.as_bytes(), 0o600).map_err(|e| format!("sidecar-{node}.conf: {e}"))?;
     }
     Ok(())
 }
@@ -202,6 +222,15 @@ mod tests {
         assert_eq!(timing(2).casper_loop_ms, 1000);
         assert_eq!(timing(10).casper_loop_ms, 3000);
         assert!(timing(10).heartbeat_max_lfb_age_s > timing(2).heartbeat_max_lfb_age_s);
+    }
+
+    #[test]
+    fn sidecar_conf_has_the_four_hocon_buckets() {
+        let s = render_sidecar_conf("validator-1", 41410);
+        for key in ["oracle-static-files", "oracle-static-dirs", "consensus-static-files", "consensus-static-dirs"] {
+            assert!(s.contains(key), "{key} missing from {s}");
+        }
+        assert!(s.contains("127.0.0.1:41410"));
     }
 
     #[test]

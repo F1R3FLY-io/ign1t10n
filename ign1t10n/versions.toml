@@ -25,6 +25,16 @@ repository = "https://github.com/F1R3FLY-io/embers"
 revision   = "28e50d4bf287d76e3ea72b0704895d1f96a8c07f"
 package    = "embers"
 
+# `f1r3drive` + its `file-read-service` sidecar. The sidecar is a workspace
+# crate inside f1r3node-rust (`scripts/file-read-service`) so it builds at the
+# same revision as `[f1r3node]`; only the drive daemon is pinned here.
+[f1r3drive]
+repository = "https://github.com/F1R3FLY-io/f1r3drive-rust"
+revision   = "0000000000000000000000000000000000000000"  # PIN before release
+package    = "f1r3drive"
+# Sidecar built from the f1r3node-rust revision above.
+sidecar_package = "file-read-service"
+
 [platform]
 architectures = ["arm64"]   # Decision 2: Apple silicon only
 minimum_macos = "13.0"      # Decision 3: SMAppService

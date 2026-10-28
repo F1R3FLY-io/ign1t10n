@@ -82,6 +82,16 @@ impl Api {
         }
     }
 
+    /// `file-read-service` is up when any HTTP request to it returns a
+    /// response (even a 404 for an unknown logical name, which proves the
+    /// axum router is serving and distinguishes "up" from "connect refused").
+    pub fn sidecar_alive_why(&self) -> Result<(), String> {
+        match self.get("/files/__ign1t10n_health__") {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     fn post(&self, path: &str, body: &Value) -> Result<(u16, Value), String> {
         let r = self
             .http

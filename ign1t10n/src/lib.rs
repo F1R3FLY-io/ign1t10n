@@ -10,6 +10,7 @@ pub mod admin;
 pub mod amounts;
 pub mod api;
 pub mod control;
+pub mod drive;
 pub mod embers;
 pub mod gaze;
 pub mod genesis;

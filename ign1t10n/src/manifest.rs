@@ -6,8 +6,9 @@
 
 use crate::paths::{Paths, write_atomic};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Manifest {
@@ -26,6 +27,13 @@ pub struct Manifest {
     pub resize: Option<Resize>,
     #[serde(default)]
     pub stages: Stages,
+    /// One file-read-service sidecar per shard node (bootstrap, each
+    /// validator, observer); keyed by the node's role name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sidecar_configs: BTreeMap<String, SidecarConf>,
+    /// Opt-in f1r3drive mounts, keyed by alias; added via `ctl drive add`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub drives: BTreeMap<String, DriveConf>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -186,6 +194,36 @@ pub struct Resize {
     pub undo: bool,
 }
 
+/// One file-read-service sidecar per shard node.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SidecarConf {
+    /// HTTP port the sidecar listens on.
+    pub port: u16,
+}
+
+/// An f1r3drive mount added via `ctl drive add`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DriveConf {
+    /// Per-drive state (keys, cache, local metadata).
+    pub state_dir: String,
+    /// Path to the drive's deployer key (raw-hex secret), inside `state_dir`.
+    pub key_file: String,
+    /// FUSE mount directory.
+    pub mount_dir: String,
+    /// Which shard node to write deploys through (`validator-<n>`).
+    pub validator: String,
+    /// Which shard node to read exploratory deploys through.
+    pub observer: String,
+    /// Which sidecar to read blobs through (role name).
+    pub sidecar: String,
+    /// Peer deployer public keys this drive follows.
+    #[serde(default)]
+    pub tracked_pubkeys: Vec<String>,
+    /// Process id while mounted; `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Stages {
     #[serde(default)] pub preflight: bool,
@@ -196,13 +234,14 @@ pub struct Stages {
     #[serde(default)] pub configs: bool,
     #[serde(default)] pub agent: bool,
     #[serde(default)] pub genesis: bool,
+    #[serde(default)] pub sidecars: bool,
     #[serde(default)] pub gaze: bool,
     #[serde(default)] pub opened: bool,
 }
 
 impl Stages {
     pub fn complete(&self) -> bool {
-        self.preflight && self.ports && self.wallet && self.keys && self.genesis_files && self.configs && self.agent && self.genesis && self.gaze
+        self.preflight && self.ports && self.wallet && self.keys && self.genesis_files && self.configs && self.agent && self.genesis && self.sidecars && self.gaze
     }
     /// Ready for the supervisor: files exist, genesis may still be pending.
     pub fn prepared(&self) -> bool {
@@ -260,6 +299,9 @@ impl Manifest {
         if let Some(e) = &self.embers {
             t.push(e.port);
         }
+        for s in self.sidecar_configs.values() {
+            t.push(s.port);
+        }
         t
     }
     pub fn free_slot(&self) -> Option<u8> {
@@ -286,6 +328,8 @@ pub mod tests_support {
                 .collect(),
             resize: None,
             stages: Stages::default(),
+            sidecar_configs: BTreeMap::new(),
+            drives: BTreeMap::new(),
         }
     }
 
@@ -305,5 +349,31 @@ mod tests {
         assert_eq!(back, m);
         assert_eq!(m.n(), 2);
         assert_eq!(m.free_slot(), Some(3));
+    }
+
+    #[test]
+    fn sidecars_and_drives_round_trip() {
+        let mut m = sample();
+        m.sidecar_configs.insert("bootstrap".into(), SidecarConf { port: 41400 });
+        m.sidecar_configs.insert("validator-1".into(), SidecarConf { port: 41410 });
+        m.drives.insert(
+            "alice".into(),
+            DriveConf {
+                state_dir: "/tmp/drives/alice".into(),
+                key_file: "/tmp/drives/alice/deployer.hex".into(),
+                mount_dir: "/tmp/f1r3drive/alice".into(),
+                validator: "validator-1".into(),
+                observer: "observer".into(),
+                sidecar: "validator-1".into(),
+                tracked_pubkeys: vec!["04deadbeef".into()],
+                pid: None,
+            },
+        );
+        let t = toml::to_string_pretty(&m).unwrap();
+        assert!(t.contains("[sidecar_configs.bootstrap]"));
+        assert!(t.contains("[drives.alice]"));
+        let back: Manifest = toml::from_str(&t).unwrap();
+        assert_eq!(back, m);
+        assert!(m.taken_ports().contains(&41400));
     }
 }

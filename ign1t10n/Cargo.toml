@@ -17,6 +17,14 @@ path = "src/main.rs"
 name = "fake_node"
 path = "examples/fake_node.rs"
 
+[[example]]
+name = "fake_sidecar"
+path = "examples/fake_sidecar.rs"
+
+[[example]]
+name = "fake_drive"
+path = "examples/fake_drive.rs"
+
 [dependencies]
 # F1R3Gaze at the release ign1t10n bundles (versions.toml): deploy
 # construction and signing byte-for-byte as the node verifies it, the node
