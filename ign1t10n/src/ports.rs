@@ -9,6 +9,10 @@ pub const OBSERVER_BASE: u16 = 40450;
 pub const EMBERS_PORT: u16 = 40600;
 const FALLBACK_START: u16 = 41400;
 const FALLBACK_END: u16 = 49990;
+/// The demo's convention: a sidecar listens 1000 above its node's base port
+/// (e.g. bootstrap on 40400 → sidecar on 41400). Falls back to any free port
+/// when the preferred one is taken.
+pub const SIDECAR_OFFSET: u16 = 1000;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Block(pub u16);
@@ -68,6 +72,12 @@ pub fn allocate_single(preferred: u16, taken: &[u16]) -> Option<u16> {
     (FALLBACK_START + 6..=FALLBACK_END).step_by(10).find(|p| !taken.contains(p) && port_free(*p))
 }
 
+/// A sidecar port for a node whose base port is `node_base`: prefer
+/// `node_base + SIDECAR_OFFSET`, then fall back to any free single port.
+pub fn allocate_sidecar(node_base: u16, taken: &[u16]) -> Option<u16> {
+    allocate_single(node_base.saturating_add(SIDECAR_OFFSET), taken)
+}
+
 /// Who holds a port, for the "port in use" message (via `lsof`).
 pub fn holder(p: u16) -> Option<String> {
     let out = std::process::Command::new("lsof")
@@ -110,5 +120,14 @@ mod tests {
         assert_ne!(b.0, p);
         let again = allocate(b.0, &b.all()).unwrap();
         assert_ne!(again, b, "ports already given to this shard are not reused");
+    }
+
+    #[test]
+    fn sidecar_prefers_offset_but_falls_back() {
+        let p = allocate_sidecar(40400, &[]).expect("some sidecar port");
+        assert_eq!(p, 41400);
+        // Reserve the preferred port in `taken`: must pick something else.
+        let other = allocate_sidecar(40400, &[41400]).expect("fallback sidecar port");
+        assert_ne!(other, 41400);
     }
 }

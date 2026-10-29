@@ -11,9 +11,13 @@ fn exe() -> PathBuf {
 }
 
 fn fake_node() -> PathBuf {
-    let p = exe().parent().unwrap().join("examples/fake_node");
+    fake_example("fake_node")
+}
+
+fn fake_example(name: &str) -> PathBuf {
+    let p = exe().parent().unwrap().join(format!("examples/{name}"));
     if !p.exists() {
-        assert!(Command::new(env!("CARGO")).args(["build", "--example", "fake_node"]).status().unwrap().success());
+        assert!(Command::new(env!("CARGO")).args(["build", "--example", name]).status().unwrap().success());
     }
     p
 }
@@ -44,6 +48,8 @@ impl Env {
             .env("F1R3GAZE_PROFILE", self.root.join("profile"))
             .env("IGN1T10N_NODE_BIN", fake_node())
             .env("IGN1T10N_EMBERS_BIN", fake_node())
+            .env("IGN1T10N_SIDECAR_BIN", fake_example("fake_sidecar"))
+            .env("IGN1T10N_F1R3DRIVE_BIN", fake_example("fake_drive"))
             .env("IGN1T10N_GAZE_BIN", self.root.join("f1r3gaze"))
             .env("IGN1T10N_DEV_SECRETS", "1")
             .env("IGN1T10N_QUIET", "1")

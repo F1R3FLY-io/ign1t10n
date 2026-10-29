@@ -45,6 +45,47 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: embers, path: embers/target/aarch64-apple-darwin/release/embers }
 
+  # `file-read-service` HTTP sidecar: a workspace crate inside f1r3node-rust,
+  # built at the same pinned revision as the node binary so its WAL-aware
+  # fcntl bracket matches the node's.
+  sidecar:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import tomllib; v = tomllib.load(open("versions.toml","rb"))["f1r3node"]
+          print(f"rev={v['revision']}"); print(f"toolchain={v['toolchain']}")
+          PY
+      - uses: actions/checkout@v4
+        with: { repository: F1R3FLY-io/f1r3node-rust, ref: "${{ steps.v.outputs.rev }}", path: node }
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ steps.v.outputs.toolchain }}", targets: aarch64-apple-darwin }
+      - run: brew install protobuf
+      - run: cargo build --release --locked -p file-read-service --target aarch64-apple-darwin
+        working-directory: node
+      - uses: actions/upload-artifact@v4
+        with: { name: file-read-service, path: node/target/aarch64-apple-darwin/release/file-read-service }
+
+  # `f1r3drive` FUSE mount. Supervised by ign1t10n as an opt-in service, so
+  # it is bundled with the package but never started unprompted.
+  f1r3drive:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: python3 -c "import tomllib;print('rev='+tomllib.load(open('versions.toml','rb'))['f1r3drive']['revision'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with: { repository: F1R3FLY-io/f1r3drive-rust, ref: "${{ steps.v.outputs.rev }}", path: drive }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+      - run: brew install protobuf macfuse || true
+      - run: cargo build --release --locked -p f1r3drive --target aarch64-apple-darwin
+        working-directory: drive
+      - uses: actions/upload-artifact@v4
+        with: { name: f1r3drive, path: drive/target/aarch64-apple-darwin/release/f1r3drive }
+
   gaze:
     runs-on: macos-14
     steps:
@@ -57,7 +98,7 @@ jobs:
         with: { name: gaze, path: gaze/*.dmg }
 
   assemble:
-    needs: [node, embers, gaze]
+    needs: [node, embers, gaze, sidecar, f1r3drive]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -80,8 +121,8 @@ jobs:
       - name: Notary profile
         if: ${{ secrets.NOTARY_APPLE_ID != '' }}
         run: xcrun notarytool store-credentials ign1t10n --apple-id "${{ secrets.NOTARY_APPLE_ID }}" --team-id "${{ secrets.TEAM_ID }}" --password "${{ secrets.NOTARY_PASSWORD }}"
-      - run: chmod +x in/f1r3node/node in/embers/embers
-      - run: packaging/macos/build.sh "${GITHUB_REF_NAME#v}" in/f1r3node/node in/embers/embers "$(ls in/gaze/*.dmg | head -1)"
+      - run: chmod +x in/f1r3node/node in/embers/embers in/file-read-service/file-read-service in/f1r3drive/f1r3drive
+      - run: packaging/macos/build.sh "${GITHUB_REF_NAME#v}" in/f1r3node/node in/embers/embers in/file-read-service/file-read-service in/f1r3drive/f1r3drive "$(ls in/gaze/*.dmg | head -1)"
         env:
           SIGN_APP: ${{ secrets.SIGN_APP }}
           SIGN_PKG: ${{ secrets.SIGN_PKG }}
@@ -107,7 +148,16 @@ jobs:
           $B ctl status
           $B ctl resize 3; until $B ctl status --json | grep -q '"validators": 3' && ! $B ctl status --json | grep -q '"resize"'; do sleep 10; done
           $B ctl resize 2; until $B ctl status --json | grep -q '"validators": 2' && ! $B ctl status --json | grep -q '"resize"'; do sleep 10; done
-          lsof -nP -iTCP -sTCP:LISTEN | grep -E 'f1r3node|embers' || true
+          lsof -nP -iTCP -sTCP:LISTEN | grep -E 'f1r3node|embers|file-read-service' || true
+          # One sidecar per shard node, each answering HTTP.
+          for p in $($B ctl status --json | python3 -c 'import json,sys;s=json.load(sys.stdin);[print(c["port"]) for c in s.get("sidecars", [])]'); do
+            curl -fsS "http://127.0.0.1:$p/files/__smoke__" > /dev/null || curl -sS -o /dev/null -w "sidecar $p: %{http_code}\n" "http://127.0.0.1:$p/files/__smoke__"
+          done
+          $B ctl drive add demo
+          $B ctl drive up demo
+          ls "$HOME/f1r3drive/demo" || { echo "demo mount is empty"; exit 1; }
+          $B ctl drive down demo
+          $B ctl drive remove demo
           $B ctl status --json | tee status.json
           ! grep -q '"exposed"' status.json || echo "::warning::sockets listen off loopback (N1 not in this node)"
       - if: always()

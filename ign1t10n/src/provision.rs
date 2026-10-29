@@ -36,12 +36,13 @@ pub enum Stage {
     Configs,
     Agent,
     Genesis,
+    Sidecars,
     Gaze,
     Opened,
 }
 
 impl Stage {
-    pub const ALL: [Stage; 10] = [Stage::Preflight, Stage::Ports, Stage::Wallet, Stage::Keys, Stage::GenesisFiles, Stage::Configs, Stage::Agent, Stage::Genesis, Stage::Gaze, Stage::Opened];
+    pub const ALL: [Stage; 11] = [Stage::Preflight, Stage::Ports, Stage::Wallet, Stage::Keys, Stage::GenesisFiles, Stage::Configs, Stage::Agent, Stage::Genesis, Stage::Sidecars, Stage::Gaze, Stage::Opened];
     pub fn title(self) -> &'static str {
         match self {
             Stage::Preflight => "Checking this Mac",
@@ -52,6 +53,7 @@ impl Stage {
             Stage::Configs => "Configuring the nodes",
             Stage::Agent => "Registering the background item",
             Stage::Genesis => "Starting the shard (genesis)",
+            Stage::Sidecars => "Starting the file-read sidecars",
             Stage::Gaze => "Pointing F1R3Gaze at the shard",
             Stage::Opened => "Opening F1R3Gaze",
         }
@@ -66,6 +68,7 @@ impl Stage {
             Stage::Configs => s.configs,
             Stage::Agent => s.agent,
             Stage::Genesis => s.genesis,
+            Stage::Sidecars => s.sidecars,
             Stage::Gaze => s.gaze,
             Stage::Opened => s.opened,
         }
@@ -80,6 +83,7 @@ impl Stage {
             Stage::Configs => &mut s.configs,
             Stage::Agent => &mut s.agent,
             Stage::Genesis => &mut s.genesis,
+            Stage::Sidecars => &mut s.sidecars,
             Stage::Gaze => &mut s.gaze,
             Stage::Opened => &mut s.opened,
         };
@@ -150,6 +154,8 @@ fn skeleton(c: &Choices) -> Manifest {
         validators: vec![],
         resize: None,
         stages: Stages::default(),
+        sidecar_configs: std::collections::BTreeMap::new(),
+        drives: std::collections::BTreeMap::new(),
     }
 }
 
@@ -222,7 +228,29 @@ fn allocate_ports(m: &mut Manifest) -> Result<(), String> {
         .collect::<Result<_, String>>()?;
     if m.options.embers {
         let port = ports::allocate_single(ports::EMBERS_PORT, &taken).ok_or("no free port for Embers")?;
+        taken.push(port);
         m.embers = Some(Embers { port, ..Default::default() });
+    }
+    allocate_sidecar_ports(m, &mut taken)?;
+    Ok(())
+}
+
+/// One sidecar port per shard node. Called during `S1: Ports` and again
+/// from the `Sidecars` stage when the manifest predates this feature.
+pub fn allocate_sidecar_ports(m: &mut Manifest, taken: &mut Vec<u16>) -> Result<(), String> {
+    let mut need = vec![("bootstrap".to_string(), m.bootstrap.base_port), ("observer".to_string(), m.observer.base_port)];
+    for v in &m.validators {
+        if v.state != SlotState::Absent {
+            need.push((nodeconf::validator_name(v.slot), v.base_port));
+        }
+    }
+    for (name, base) in need {
+        if m.sidecar_configs.contains_key(&name) {
+            continue;
+        }
+        let port = ports::allocate_sidecar(base, taken).ok_or_else(|| format!("no free sidecar port for {name}"))?;
+        taken.push(port);
+        m.sidecar_configs.insert(name, SidecarConf { port });
     }
     Ok(())
 }
@@ -385,6 +413,20 @@ pub fn provision(r: &Run) -> Result<Manifest, String> {
                     m = Manifest::load(p)?.ok_or("shard.toml disappeared")?;
                     Ok(())
                 }
+                Stage::Sidecars => {
+                    // The manifest predates sidecars when upgrading from
+                    // schema 3; fill in any missing ports before writing
+                    // configs and asking the supervisor to spawn them.
+                    let mut taken = m.taken_ports();
+                    allocate_sidecar_ports(&mut m, &mut taken)?;
+                    nodeconf::write_all(p, &m)?;
+                    m.save(p)?;
+                    let resp = control::call(p, &Request::StartSidecars, Duration::from_secs(120))?;
+                    if !resp.ok {
+                        return Err(resp.error.unwrap_or_else(|| "sidecars did not start".into()));
+                    }
+                    Ok(())
+                }
                 Stage::Gaze => {
                     m = Manifest::load(p)?.ok_or("shard.toml disappeared")?;
                     m.options.gaze_integration = r.choices.gaze_integration;
@@ -431,7 +473,7 @@ pub fn reprovision(p: &Paths, s: &dyn Secrets, old: &Manifest, n0: u8) -> Result
     keys(p, s, &mut m)?;
     crate::genesis::write(p, &m)?;
     nodeconf::write_all(p, &m)?;
-    m.stages = Stages { preflight: true, ports: true, wallet: true, keys: true, genesis_files: true, configs: true, agent: true, genesis: false, gaze: old.stages.gaze, opened: true };
+    m.stages = Stages { preflight: true, ports: true, wallet: true, keys: true, genesis_files: true, configs: true, agent: true, genesis: false, sidecars: false, gaze: old.stages.gaze, opened: true };
     m.save(p)?;
     Ok(m)
 }
